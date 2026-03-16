@@ -1,0 +1,293 @@
+\relax 
+\providecommand\zref@newlabel[2]{}
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand*\HyPL@Entry[1]{}
+\HyPL@Entry{0<</S/D>>}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{6}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Why This Course Exists}{6}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Industrialization of Language Models}{6}{subsection.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.3}What Transfers to Frontier Models}{6}{subsection.1.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.4}Efficiency as the Central Principle}{7}{subsection.1.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.5}Historical Landscape of Language Models}{7}{subsection.1.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.6}Levels of Openness}{7}{subsection.1.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.7}Executable Lecture and Course Structure}{8}{subsection.1.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.8}Summary}{8}{subsection.1.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Tokenization}{9}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Why Tokenization Is Needed}{9}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}What Makes a Good Tokenizer}{9}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Examples and Intuition}{10}{subsection.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Character-Based Tokenization}{10}{subsection.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.5}Byte-Based Tokenization}{11}{subsection.2.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.6}Word-Based Tokenization}{11}{subsection.2.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.7}Byte Pair Encoding (BPE): The Main Practical Compromise}{12}{subsection.2.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.8}Training a BPE Tokenizer}{12}{subsection.2.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.9}The Merge Operation}{13}{subsection.2.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.10}Encoding and Decoding with BPE}{13}{subsection.2.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.11}Pre-tokenization and GPT-2 Style Segmentation}{14}{subsection.2.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.12}Implementation Advice and Engineering Suggestions}{14}{subsection.2.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{(1) 先保证正确性，再考虑速度。}{14}{section*.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{(2) 明确区分训练阶段与使用阶段。}{14}{section*.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{(3) 不要在 encode 时无脑遍历所有 merges。}{14}{section*.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{(4) 正确处理 special tokens。}{15}{section*.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{(5) 预切分策略非常重要。}{15}{section*.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{(6) 为调试保留可解释性。}{15}{section*.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.13}Conceptual Summary}{15}{subsection.2.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.14}Summary}{15}{subsection.2.14}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Lecture 02, Part I: Motivation, Tensor Basics, and Memory Accounting}{16}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Overview of This Part}{16}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Motivating Questions: Why Resource Accounting Matters}{16}{subsection.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.2.1}Question 1: Training a 70B model on 15T tokens with 1024 H100s}{16}{subsubsection.3.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{17}{section*.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.2.2}Question 2: How large a model can 8 H100s hold with AdamW (naively)?}{17}{subsubsection.3.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{lecture 中的两个 caveat}{18}{section*.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{18}{section*.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Tensor Basics}{18}{subsection.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.1}How tensors are created}{19}{subsubsection.3.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{19}{section*.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Tensor Memory Accounting}{19}{subsection.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.4.1}float32}{20}{subsubsection.3.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{20}{section*.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.4.2}float16}{21}{subsubsection.3.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{21}{section*.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.4.3}bfloat16}{21}{subsubsection.3.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{21}{section*.14}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.4.4}fp8}{22}{subsubsection.3.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}What This Part Really Wants Us to Learn}{22}{subsection.3.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.1}(1) Always do rough resource accounting first}{22}{subsubsection.3.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.2}(2) Tensor is the universal storage unit}{22}{subsubsection.3.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.3}(3) Memory accounting is simple in form, but powerful in effect}{22}{subsubsection.3.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.5.4}(4) Precision choice is an engineering tradeoff}{23}{subsubsection.3.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Summary Notes}{23}{subsection.3.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Lecture 02, Part II: Tensors on GPUs and Basic Tensor Operations}{24}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Overview of This Part}{24}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Tensors on GPUs}{24}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.1}Default device: CPU}{24}{subsubsection.4.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{25}{section*.15}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.2}Why move tensors to GPU?}{25}{subsubsection.4.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{25}{section*.16}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.3}Moving tensors to GPU}{26}{subsubsection.4.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{26}{section*.17}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.2.4}Memory accounting when moving to GPU}{26}{subsubsection.4.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{26}{section*.18}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Tensor Operations}{27}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Tensor Storage}{27}{subsection.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.1}What is a tensor in PyTorch?}{27}{subsubsection.4.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.4.2}Stride}{28}{subsubsection.4.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{28}{section*.19}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Tensor Slicing and Views}{28}{subsection.4.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.5.1}Views do not copy memory}{29}{subsubsection.4.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{(1) Get row 0}{29}{section*.20}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{(2) Get column 1}{29}{section*.21}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{(3) View 2x3 matrix as 3x2 matrix}{29}{section*.22}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{(4) Transpose the matrix}{29}{section*.23}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{29}{section*.24}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.5.2}Non-contiguous tensors}{30}{subsubsection.4.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{30}{section*.25}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.5.3}contiguous() creates a copy}{30}{subsubsection.4.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{31}{section*.26}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.6}Elementwise Operations}{31}{subsection.4.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{32}{section*.27}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.7}Matrix Multiplication}{32}{subsection.4.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.7.1}Basic example}{32}{subsubsection.4.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.7.2}Batched matrix multiplication}{32}{subsubsection.4.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{33}{section*.28}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.8}What This Part Really Wants Us to Learn}{33}{subsection.4.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.8.1}(1) Device matters}{33}{subsubsection.4.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.8.2}(2) Tensor is storage plus metadata}{33}{subsubsection.4.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.8.3}(3) View is cheap, copy is expensive}{33}{subsubsection.4.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.8.4}(4) Matrix multiplication dominates}{34}{subsubsection.4.8.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.9}Summary Notes}{34}{subsection.4.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Lecture 02, Part III: Tensor Dimensions, Jaxtyping, and Einops}{35}{section.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Overview of This Part}{35}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Motivation: Why Ordinary PyTorch Code Becomes Hard to Read}{35}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{36}{section*.29}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Jaxtyping Basics}{36}{subsection.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.3.1}Old way vs new way}{36}{subsubsection.5.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{37}{section*.30}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{进一步理解}{37}{section*.31}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Einops}{37}{subsection.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.5}Einops Einsum}{38}{subsection.5.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.5.1}The setup}{38}{subsubsection.5.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.5.2}Old way}{38}{subsubsection.5.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.5.3}New (einops) way}{38}{subsubsection.5.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{数学理解}{39}{section*.32}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.5.4}Using \texttt  {...}}{39}{subsubsection.5.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{39}{section*.33}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.6}Einops Reduce}{39}{subsection.5.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.6.1}The setup}{39}{subsubsection.5.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.6.2}Old way}{39}{subsubsection.5.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.6.3}New (einops) way}{40}{subsubsection.5.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{40}{section*.34}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.7}Einops Rearrange}{40}{subsection.5.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.7.1}Motivation}{40}{subsubsection.5.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.7.2}Step 1: Split a dimension}{41}{subsubsection.5.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{41}{section*.35}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.7.3}Step 2: Apply a transformation on one sub-dimension}{41}{subsubsection.5.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{42}{section*.36}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.7.4}Step 3: Merge dimensions back}{42}{subsubsection.5.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{42}{section*.37}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.8}What This Part Really Wants Us to Learn}{42}{subsection.5.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.8.1}(1) Dimension bookkeeping is a real problem}{43}{subsubsection.5.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.8.2}(2) Named dimensions improve readability}{43}{subsubsection.5.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.8.3}(3) Einsum expresses contraction clearly}{43}{subsubsection.5.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.8.4}(4) Rearrange expresses shape transformation semantically}{43}{subsubsection.5.8.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {5.8.5}(5) Documentation matters even without enforcement}{43}{subsubsection.5.8.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.9}Summary Notes}{43}{subsection.5.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Lecture 02, Part IV: Compute Accounting, FLOPs, and Gradients}{45}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Overview of This Part}{45}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}What is a FLOP?}{45}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{46}{section*.38}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Large-Scale Intuition: Why FLOPs Matter}{46}{subsection.6.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{46}{section*.39}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}A First-Principles Example: Linear Model FLOPs}{46}{subsection.6.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.4.1}The setup}{47}{subsubsection.6.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.4.2}Counting FLOPs}{47}{subsubsection.6.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{48}{section*.40}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.4.3}Other operations}{48}{subsubsection.6.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{48}{section*.41}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.4.4}Interpretation}{48}{subsubsection.6.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{48}{section*.42}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}From FLOPs to Wall-Clock Time}{49}{subsection.6.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{为什么要 synchronize}{49}{section*.43}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.5.1}Promised FLOP/s}{49}{subsubsection.6.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.5.2}MFU: Model FLOPs Utilization}{50}{subsubsection.6.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{50}{section*.44}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.5.3}bfloat16 comparison}{50}{subsubsection.6.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{50}{section*.45}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.6}Summary of Tensor Operation FLOPs}{51}{subsection.6.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.7}Gradients Basics}{51}{subsection.6.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.7.1}A scalar example}{51}{subsubsection.6.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{为什么 \(w.grad = [1,2,3]\)}{52}{section*.46}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{52}{section*.47}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.8}Gradients FLOPs}{52}{subsection.6.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.8.1}The model}{53}{subsubsection.6.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.8.2}Forward FLOPs}{53}{subsubsection.6.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.8.3}Backward for \(w_2\)}{53}{subsubsection.6.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.8.4}Backward for \(h_1\)}{54}{subsubsection.6.8.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.8.5}Backward for \(w_1\)}{54}{subsubsection.6.8.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.8.6}Putting it together}{54}{subsubsection.6.8.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{55}{section*.48}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.9}What This Part Really Wants Us to Learn}{55}{subsection.6.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.9.1}(1) FLOPs can be counted systematically}{55}{subsubsection.6.9.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.9.2}(2) Matmul is the dominant compute term}{55}{subsubsection.6.9.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.9.3}(3) Hardware throughput depends on both device and dtype}{55}{subsubsection.6.9.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.9.4}(4) Backward is expensive}{55}{subsubsection.6.9.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {6.9.5}(5) The famous \(6ND\) rule has a real derivation}{56}{subsubsection.6.9.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.10}Summary Notes}{56}{subsection.6.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Lecture 02, Part V: Parameters, Initialization, and Building a Simple Model}{57}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Overview of This Part}{57}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Model Parameters in PyTorch}{57}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{58}{section*.49}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Parameter Initialization}{58}{subsection.7.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.3.1}Naive initialization and its problem}{58}{subsubsection.7.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{为什么会这样}{58}{section*.50}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{59}{section*.51}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.3.2}Rescaling by \(1/\sqrt  {input\_dim}\)}{59}{subsubsection.7.3.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.3.3}Relation to Xavier initialization}{60}{subsubsection.7.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{60}{section*.52}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.3.4}Truncated normal for extra safety}{60}{subsubsection.7.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{60}{section*.53}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.4}Building a Custom Model}{61}{subsection.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.4.1}A simple custom linear layer}{61}{subsubsection.7.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{61}{section*.54}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.4.2}A simple deep linear model: Cruncher}{61}{subsubsection.7.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{62}{section*.55}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.4.3}Why \texttt  {ModuleList}?}{63}{subsubsection.7.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{63}{section*.56}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.4.4}The final \texttt  {squeeze}}{63}{subsubsection.7.4.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{63}{section*.57}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.5}Inspecting Model Parameters}{63}{subsection.7.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.5.1}Parameter sizes via state\_dict}{64}{subsubsection.7.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.5.2}Total number of parameters}{64}{subsubsection.7.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{65}{section*.58}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.6}Moving the Model to GPU}{65}{subsection.7.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{65}{section*.59}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.7}Running the Model}{65}{subsection.7.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{66}{section*.60}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.8}What This Part Really Wants Us to Learn}{66}{subsection.7.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.8.1}(1) Parameters are special tensors}{66}{subsubsection.7.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.8.2}(2) Initialization is about signal scale}{66}{subsubsection.7.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.8.3}(3) Models are structured parameter collections}{66}{subsubsection.7.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.8.4}(4) Module registration matters}{66}{subsubsection.7.8.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {7.8.5}(5) Shape discipline matters}{66}{subsubsection.7.8.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.9}Summary Notes}{67}{subsection.7.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Lecture 3, Part I: Introduction, Starting Point, and How to Think About LM Architectures}{68}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Overview of This Part}{68}{subsection.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Opening and Logistics}{68}{subsection.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{68}{section*.61}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Outline and Goals}{69}{subsection.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{69}{section*.62}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{这一页真正想建立的预期}{69}{section*.63}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Starting Point: The ``Original'' Transformer}{70}{subsection.8.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{70}{section*.64}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{为什么这一页重要}{70}{section*.65}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.5}What You Implemented: A Simple, Modern Variant}{70}{subsection.8.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{71}{section*.66}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{为什么课程先给这个版本}{71}{section*.67}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{注意细节}{71}{section*.68}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.6}How Should We Think About Architectures?}{71}{subsection.8.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{72}{section*.69}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{这一页真正想传达的学习方法}{72}{section*.70}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.7}Learn from the Data: Looking Across Many Models}{72}{subsection.8.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{72}{section*.71}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{注意细节}{73}{section*.72}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.8}What Are We Going to Cover?}{73}{subsection.8.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{73}{section*.73}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{这页背后的课程选择}{73}{section*.74}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.9}High-Level Preview of Architecture Variations}{74}{subsection.8.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{74}{section*.75}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{为什么这里先强调 ``except pre-norm''}{74}{section*.76}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.10}What This Part Really Wants Us to Learn}{74}{subsection.8.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.10.1}(1) Use the original Transformer as a reference point}{74}{subsubsection.8.10.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.10.2}(2) Your assignment implementation is already a modernized baseline}{75}{subsubsection.8.10.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.10.3}(3) Architecture comparison needs a framework}{75}{subsubsection.8.10.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {8.10.4}(4) This lecture is about extracting structured experience}{75}{subsubsection.8.10.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.11}Summary Notes}{75}{subsection.8.11}\protected@file@percent }
+\bibdata{report_bibtex}
+\bibstyle{abbrvnat}
+\@writefile{toc}{\contentsline {section}{\numberline {9}Lecture 3, Part II: Normalization Choices in Modern LLMs}{77}{section.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.1}Overview of This Part}{77}{subsection.9.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.2}Pre-vs-Post Norm}{77}{subsection.9.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.1}The one thing everyone agrees on}{77}{subsubsection.9.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{lecture 严格内容的含义}{78}{section*.77}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{什么是 pre-norm 与 post-norm}{78}{section*.78}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{78}{section*.79}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.2}The data pages}{79}{subsubsection.9.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{79}{section*.80}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.3}Explanations: why pre-norm?}{79}{subsubsection.9.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{严格记录 lecture 内容}{79}{section*.81}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{80}{section*.82}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{一个很重要的理解}{80}{section*.83}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.3}New Things: ``Double'' Norm}{80}{subsection.9.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{lecture 内容的严格含义}{80}{section*.84}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{81}{section*.85}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.4}LayerNorm vs RMSNorm}{81}{subsection.9.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解 LayerNorm}{82}{section*.86}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解 RMSNorm}{82}{section*.87}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{lecture 在这里真正强调什么}{82}{section*.88}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.5}Why RMSNorm?}{82}{subsection.9.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{83}{section*.89}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{注意细节}{83}{section*.90}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.6}Why RMSNorm (2): FLOPs are not runtime}{83}{subsection.9.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{严格记录 lecture 的意思}{83}{section*.91}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{这是 lecture 中非常重要的一个 general lesson}{83}{section*.92}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.7}RMSNorm Validation}{84}{subsection.9.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解}{84}{section*.93}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{注意细节}{84}{section*.94}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.8}More Generally: Dropping Bias Terms}{84}{subsection.9.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{严格记录 lecture 内容}{84}{section*.95}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{85}{section*.96}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.9}LayerNorm Recap}{85}{subsection.9.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{这页的意义}{85}{section*.97}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{理解与注意事项}{85}{section*.98}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.10}What This Part Really Wants Us to Learn}{86}{subsection.9.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.10.1}(1) Pre-norm is one of the strongest modern LLM consensuses}{86}{subsubsection.9.10.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.10.2}(2) Residual-path thinking is central}{86}{subsubsection.9.10.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.10.3}(3) RMSNorm is an engineering simplification that often works}{86}{subsubsection.9.10.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.10.4}(4) FLOPs do not fully explain runtime}{86}{subsubsection.9.10.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.10.5}(5) Dropping bias is part of a broader design trend}{86}{subsubsection.9.10.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.11}Summary Notes}{87}{subsection.9.11}\protected@file@percent }
+\newlabel{LastPage}{{9.11}{87}{Summary Notes}{page.87}{}}
+\gdef\lastpage@lastpage{87}
+\gdef\lastpage@lastpageHy{87}
+\gdef \@abspage@last{87}
