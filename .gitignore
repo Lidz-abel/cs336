@@ -10,6 +10,7 @@ code part/part1_components/assignment1-basics/.venv/
 *.out
 *.toc
 *.log
+*.synctex.gz
 
 **/assignment1_report.tex
 **/tokenizer_report.tex
