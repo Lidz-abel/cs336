@@ -1,1 +1,12 @@
 code part/part1_components/assignment1-basics/.venv/
+**/.venv/
+**/.uv-cache/
+**/.pytest_cache/
+**/__pycache__/
+**/.tiktoken-cache/
+**/.uv-bootstrap/
+
+*.aux
+*.out
+*.toc
+*.log

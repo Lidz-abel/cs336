@@ -1,0 +1,616 @@
+\documentclass[11pt,a4paper]{ctexart}
+
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{longtable}
+\usepackage{listings}
+\usepackage{enumitem}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  urlcolor=blue!50!black,
+  citecolor=blue!50!black
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  frame=single,
+  framerule=0.3pt,
+  rulecolor=\color{black!30},
+  showstringspaces=false
+}
+
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash\ttfamily\footnotesize}p{#1}}
+\setlength{\LTleft}{0pt}
+\setlength{\LTright}{0pt}
+
+\title{我在 CS336 中实现 Byte-level BPE Tokenizer 的完整记录}
+\author{ln}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\section{写在前面}
+这份报告记录了我在 Stanford CS336 Assignment 1 中实现 \textbf{byte-level BPE tokenizer} 的全过程。我的目标不是只把测试跑通，而是把整个实现路径讲清楚：为什么这样拆函数、接口是怎样接上的、训练为什么需要优化、以及一段真实文本在我的实现里到底经历了哪些函数调用和状态变化。
+
+本次实现对应的核心代码位于：
+\begin{itemize}[leftmargin=2em]
+  \item \path{cs336/code part/part1_components/assignment1-basics/cs336_basics/tokenizer.py}
+  \item \path{cs336/code part/part1_components/assignment1-basics/tests/adapters.py}
+\end{itemize}
+
+\section{目标与整体结构}
+我实现的是一个典型的 GPT-2 风格 tokenizer。它有三条主线：
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{构造器与加载}：从 GPT-2 风格的 \path{vocab.json} 和 \path{merges.txt} 恢复出内部状态。
+  \item \textbf{编码}：把字符串变成 token id 序列。
+  \item \textbf{训练}：从语料中训练出新的 BPE vocabulary 和 merge 列表。
+\end{enumerate}
+
+我的实现把这三条主线拆成了几层：
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{文本层}：\texttt{split\_special\_tokens}、\texttt{pretokenize\_text}、\texttt{iter\_text\_units}
+  \item \textbf{字节层}：\texttt{pretoken\_to\_byte\_tokens}、\texttt{bytes\_to\_byte\_tokens}
+  \item \textbf{BPE 层}：\texttt{get\_adjacent\_pairs}、\texttt{merge\_pair\_in\_sequence}、\texttt{merge\_pretoken}
+  \item \textbf{训练层}：\texttt{\_collect\_pretoken\_counts}、\texttt{\_build\_pair\_statistics}、\texttt{train\_bpe}
+  \item \textbf{接口层}：\texttt{Tokenizer.from\_files}、\texttt{Tokenizer.encode}、\texttt{Tokenizer.encode\_iterable}、\texttt{Tokenizer.decode}
+\end{itemize}
+
+\section{实现中用到的工具}
+\subsection{Python 标准库}
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{Counter}：统计 pretoken 序列和 pair 频次
+  \item \texttt{defaultdict(set)}：建立 \texttt{pair -> sequences} 的反向索引
+  \item \texttt{lru\_cache}：缓存 GPT-2 的 byte 到 printable unicode 的映射表
+  \item \texttt{json} / \texttt{os.PathLike}：从 GPT-2 风格文件中恢复 tokenizer
+\end{itemize}
+
+\subsection{第三方库}
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{regex}：用于 GPT-2 handout 里给出的正则表达式；标准库 \texttt{re} 不支持 \texttt{\textbackslash p\{L\}}、\texttt{\textbackslash p\{N\}}
+  \item \texttt{pytest}：驱动课程提供的测试
+\end{itemize}
+
+\subsection{核心数据结构}
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{vocab: dict[int, bytes]}：id 到 token bytes 的映射
+  \item \texttt{token\_to\_id: dict[bytes, int]}：反向映射
+  \item \texttt{merges: list[tuple[bytes, bytes]]}：merge 的创建顺序
+  \item \texttt{merge\_ranks: dict[tuple[bytes, bytes], int]}：pair 到 rank 的映射，rank 越小优先级越高
+  \item \texttt{token\_counts: Counter[tuple[bytes, ...]]}：训练时每个 pretoken 序列的频次
+  \item \texttt{pair\_counts: Counter[tuple[bytes, bytes]]}：训练时所有相邻 pair 的全局频次
+  \item \texttt{pair\_to\_sequences: dict[pair, set[sequence]]}：训练优化时的反向索引
+\end{itemize}
+
+\section{重要函数与接口}
+\subsection{special token 相关}
+\paragraph{\texttt{normalize\_special\_tokens}}
+输入是 \texttt{Sequence[str] | None}，输出是一个规范化后的列表。它做两件事：
+\begin{enumerate}[leftmargin=2em]
+  \item 去重
+  \item 按 \texttt{(-len(token), token)} 排序
+\end{enumerate}
+
+排序规则的目的是优先匹配更长的 special token，这样才能正确处理重叠 special token。
+
+\paragraph{\texttt{build\_special\_token\_regex}}
+把 special token 列表转成一个可复用的正则对象；如果 special token 为空，则返回 \texttt{None}。
+
+\paragraph{\texttt{split\_special\_tokens}}
+先把原始文本按 special token 切开，输出格式是：
+\begin{lstlisting}
+[(is_special, segment), ...]
+\end{lstlisting}
+
+\subsection{pretokenization 相关}
+\paragraph{\texttt{pretokenize\_text}}
+使用 handout 指定的 GPT-2 正则：
+\begin{lstlisting}
+'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+
+\end{lstlisting}
+把普通文本拆成 pretoken。
+
+\paragraph{\texttt{iter\_text\_units}}
+这是 \texttt{encode} 的直接上游函数。它先调用 \texttt{split\_special\_tokens}，然后对 ordinary segment 再调用 \texttt{pretokenize\_text}，最终统一输出：
+\begin{lstlisting}
+(True, special_token) / (False, pretoken)
+\end{lstlisting}
+
+\subsection{BPE 相关}
+\paragraph{\texttt{pretoken\_to\_byte\_tokens}}
+把一个 pretoken 先做 UTF-8 编码，再拆成单字节 token。比如：
+\begin{lstlisting}
+"hello" -> b"hello" -> [b"h", b"e", b"l", b"l", b"o"]
+\end{lstlisting}
+
+\paragraph{\texttt{get\_adjacent\_pairs}}
+给定一个 token 序列，返回所有相邻 pair。例如：
+\begin{lstlisting}
+[b"h", b"e", b"l"] -> [(b"h", b"e"), (b"e", b"l")]
+\end{lstlisting}
+
+\paragraph{\texttt{merge\_pair\_in\_sequence}}
+把一个指定 pair 在序列中所有从左到右、非重叠的出现都 merge 掉。例如：
+\begin{lstlisting}
+[b"a", b"b", b"a", b"b"], pair=(b"a", b"b")
+-> [b"ab", b"ab"]
+\end{lstlisting}
+
+\paragraph{\texttt{merge\_pretoken}}
+这是编码阶段最关键的函数。它会反复执行：
+\begin{enumerate}[leftmargin=2em]
+  \item 找当前序列中所有相邻 pair
+  \item 选出 rank 最小的可 merge pair
+  \item 调用 \texttt{merge\_pair\_in\_sequence} 合并
+  \item 直到没有可 merge 的 pair
+\end{enumerate}
+
+\subsection{训练相关}
+\paragraph{\texttt{\_collect\_pretoken\_counts}}
+先把训练语料变成：
+\begin{lstlisting}
+Counter[tuple[bytes, ...]]
+\end{lstlisting}
+也就是每个 pretoken 字节序列的出现频次。这里 special token 只当边界，不参与 merge 学习。
+
+\paragraph{\texttt{\_sequence\_pair\_counts}}
+统计单个 token sequence 内部每个 pair 出现了几次。
+
+\paragraph{\texttt{\_build\_pair\_statistics}}
+从 \texttt{token\_counts} 一次性构建：
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{pair\_counts}
+  \item \texttt{pair\_to\_sequences}
+\end{itemize}
+
+\paragraph{\texttt{\_remove\_sequence\_from\_pair\_index}}
+当一个旧序列已经被 merge 生成新序列时，把旧序列从反向索引里移除，防止索引污染。
+
+\paragraph{\texttt{train\_bpe}}
+训练主循环的逻辑是：
+\begin{enumerate}[leftmargin=2em]
+  \item 初始化 256 个单字节 token
+  \item 加入 special tokens
+  \item 收集 \texttt{token\_counts}
+  \item 建立 \texttt{pair\_counts} 与 \texttt{pair\_to\_sequences}
+  \item 每轮选一个 \texttt{best\_pair}
+  \item 只更新受影响的序列
+  \item 更新 \texttt{vocab} 和 \texttt{merges}
+\end{enumerate}
+
+\subsection{类接口}
+\paragraph{\texttt{Tokenizer.from\_files}}
+从 GPT-2 风格文件中恢复 tokenizer。这里需要先用 \texttt{gpt2\_bytes\_to\_unicode} 的逆映射，把 printable unicode 再转回真实 bytes。
+
+\paragraph{\texttt{Tokenizer.encode}}
+编码主链路如下：
+\begin{lstlisting}
+Tokenizer.encode
+  -> iter_text_units
+     -> split_special_tokens
+     -> pretokenize_text
+  -> _encode_pretoken_to_ids
+     -> _encode_pretoken_to_bytes
+        -> merge_pretoken
+           -> pretoken_to_byte_tokens
+           -> get_adjacent_pairs
+           -> merge_pair_in_sequence
+  -> token_to_id lookup
+\end{lstlisting}
+
+\paragraph{\texttt{Tokenizer.encode\_iterable}}
+流式编码接口。它使用一个 \texttt{buffer} 保存 chunk 边界上的尾巴，并通过 \texttt{\_split\_stable\_ordinary\_tail} 确保 chunk 切分不会改变编码结果。
+
+\paragraph{\texttt{Tokenizer.decode}}
+解码相对直接：
+\begin{lstlisting}
+ids -> vocab lookup -> b"".join(...) -> decode("utf-8", errors="replace")
+\end{lstlisting}
+
+\section{测试接口是如何连接的}
+课程测试不直接 import 我的实现，而是统一通过 \path{tests/adapters.py} 调用。因此，我只需要把 adapter 接到自己的实现上。
+
+\subsection{\texttt{get\_tokenizer}}
+\begin{lstlisting}[language=Python]
+def get_tokenizer(
+    vocab: dict[int, bytes],
+    merges: list[tuple[bytes, bytes]],
+    special_tokens: list[str] | None = None,
+) -> Any:
+    from cs336_basics.tokenizer import Tokenizer
+    return Tokenizer(vocab=vocab, merges=merges, special_tokens=special_tokens)
+\end{lstlisting}
+
+这条链路是：
+\begin{lstlisting}
+tests/test_tokenizer.py
+  -> tests/adapters.py::get_tokenizer
+  -> cs336_basics.tokenizer.Tokenizer(...)
+\end{lstlisting}
+
+\subsection{\texttt{run\_train\_bpe}}
+\begin{lstlisting}[language=Python]
+def run_train_bpe(
+    input_path: str | os.PathLike,
+    vocab_size: int,
+    special_tokens: list[str],
+    **kwargs,
+) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+    from cs336_basics.tokenizer import train_bpe
+    return train_bpe(
+        input_path=input_path,
+        vocab_size=vocab_size,
+        special_tokens=special_tokens,
+    )
+\end{lstlisting}
+
+这条链路是：
+\begin{lstlisting}
+tests/test_train_bpe.py
+  -> tests/adapters.py::run_train_bpe
+  -> cs336_basics.tokenizer.train_bpe(...)
+\end{lstlisting}
+
+\section{我做的训练优化}
+\subsection{朴素实现的问题}
+最朴素的 \texttt{train\_bpe} 有两个明显瓶颈：
+\begin{enumerate}[leftmargin=2em]
+  \item 每一轮 merge 都重新扫描整个 \texttt{token\_counts}，重建全部 \texttt{pair\_counts}
+  \item 每一轮都把所有 sequence 重新尝试 merge，即使它根本不包含当前的 \texttt{best\_pair}
+\end{enumerate}
+
+这种做法在小样本上没问题，但在课程的速度测试里会超时。
+
+\subsection{优化后的思路}
+我把训练改成了 \textbf{增量更新}：
+\begin{enumerate}[leftmargin=2em]
+  \item 初始化时一次性构建 \texttt{pair\_counts} 和 \texttt{pair\_to\_sequences}
+  \item 每轮先选出 \texttt{best\_pair}
+  \item 通过 \texttt{pair\_to\_sequences[best\_pair]} 找到真正受影响的序列
+  \item 先移除这些旧序列的 pair 贡献
+  \item 对这些旧序列执行 merge，生成新序列
+  \item 再把新序列的 pair 贡献加回去
+\end{enumerate}
+
+换句话说，优化并没有改变算法语义，只是避免了每轮全表重算。
+
+\subsection{为什么它是正确的}
+因为每轮我都做了这三步：
+\begin{enumerate}[leftmargin=2em]
+  \item 从全局统计里删掉旧序列的贡献
+  \item 生成 merge 后的新序列
+  \item 把新序列的贡献加回全局统计
+\end{enumerate}
+
+所以在任何时刻，\texttt{pair\_counts} 和 \texttt{pair\_to\_sequences} 都等价于“如果把当前所有 sequence 从头再统计一遍”得到的结果。
+
+\subsection{优化效果}
+优化前，\texttt{test\_train\_bpe\_speed} 大约在 2 秒量级，超过课程要求。优化后我重新运行：
+\begin{lstlisting}[language=bash]
+./.venv/bin/python -m pytest tests/test_train_bpe.py::test_train_bpe_speed
+\end{lstlisting}
+
+结果是：
+\begin{lstlisting}
+tests/test_train_bpe.py::test_train_bpe_speed PASSED
+========================= 1 passed in 0.28s =========================
+\end{lstlisting}
+
+\section{一个完整的 example：从输入文本到 token ids}
+这一节我不再用抽象例子，而是直接用下面这段真实文本：
+
+\begin{lstlisting}
+hello, world! Talkking is cheap, show me your code, coding is cheap show me your prompt. Attention is all you need.
+\end{lstlisting}
+
+这里我使用的是 \path{tests/fixtures/gpt2_vocab.json} 和 \path{tests/fixtures/gpt2_merges.txt} 恢复出的 tokenizer，也就是课程测试里同样使用的 GPT-2 风格词表。
+
+\subsection{初始化时发生了什么}
+调用：
+\begin{lstlisting}[language=Python]
+tok = Tokenizer.from_files(
+    "tests/fixtures/gpt2_vocab.json",
+    "tests/fixtures/gpt2_merges.txt",
+)
+\end{lstlisting}
+
+我实际读到的初始化结果是：
+\begin{lstlisting}
+vocab_size = 50257
+merges_size = 50000
+special_tokens = []
+_special_split_re = None
+_special_overlap = -1
+merge_ranks_size = 50000
+\end{lstlisting}
+
+也就是说，这个 example 里：
+\begin{itemize}[leftmargin=2em]
+  \item 没有 special token
+  \item 因此 \texttt{split\_special\_tokens} 不会切出特殊片段
+  \item \texttt{encode} 将完全走 ordinary text 路径
+\end{itemize}
+
+\subsection{第 1 层：\texttt{split\_special\_tokens}}
+因为这里没有 special token，所以它的输出只有一段：
+\begin{lstlisting}
+[(False, 'hello, world! Talkking is cheap, show me your code, coding is cheap show me your prompt. Attention is all you need.')]
+\end{lstlisting}
+
+\subsection{第 2 层：\texttt{iter\_text\_units}}
+接下来 \texttt{iter\_text\_units} 会调用 \texttt{pretokenize\_text}，把整段 ordinary text 切成 27 个 pretoken：
+\begin{lstlisting}
+0  (False, 'hello')
+1  (False, ',')
+2  (False, ' world')
+3  (False, '!')
+4  (False, ' Talkking')
+5  (False, ' is')
+6  (False, ' cheap')
+7  (False, ',')
+8  (False, ' show')
+9  (False, ' me')
+10 (False, ' your')
+11 (False, ' code')
+12 (False, ',')
+13 (False, ' coding')
+14 (False, ' is')
+15 (False, ' cheap')
+16 (False, ' show')
+17 (False, ' me')
+18 (False, ' your')
+19 (False, ' prompt')
+20 (False, '.')
+21 (False, ' Attention')
+22 (False, ' is')
+23 (False, ' all')
+24 (False, ' you')
+25 (False, ' need')
+26 (False, '.')
+\end{lstlisting}
+
+\subsection{第 3 层到第 5 层：逐个 pretoken 的字节拆分、merge 和 id 映射}
+下表给出了每个 pretoken 的实际处理结果。
+
+\begin{longtable}{r P{2.3cm} P{4.0cm} P{3.4cm} P{2.0cm}}
+\toprule
+idx & pretoken & byte tokens & merged bytes & ids \\
+\midrule
+\endfirsthead
+\toprule
+idx & pretoken & byte tokens & merged bytes & ids \\
+\midrule
+\endhead
+0 & hello & [b'h', b'e', b'l', b'l', b'o'] & [b'hello'] & [31373] \\
+1 & , & [b','] & [b','] & [11] \\
+2 &  world & [b' ', b'w', b'o', b'r', b'l', b'd'] & [b' world'] & [995] \\
+3 & ! & [b'!'] & [b'!'] & [0] \\
+4 &  Talkking & [b' ', b'T', b'a', b'l', b'k', b'k', b'i', b'n', b'g'] & [b' Talk', b'king'] & [12167, 3364] \\
+5 &  is & [b' ', b'i', b's'] & [b' is'] & [318] \\
+6 &  cheap & [b' ', b'c', b'h', b'e', b'a', b'p'] & [b' cheap'] & [7026] \\
+7 & , & [b','] & [b','] & [11] \\
+8 &  show & [b' ', b's', b'h', b'o', b'w'] & [b' show'] & [905] \\
+9 &  me & [b' ', b'm', b'e'] & [b' me'] & [502] \\
+10 &  your & [b' ', b'y', b'o', b'u', b'r'] & [b' your'] & [534] \\
+11 &  code & [b' ', b'c', b'o', b'd', b'e'] & [b' code'] & [2438] \\
+12 & , & [b','] & [b','] & [11] \\
+13 &  coding & [b' ', b'c', b'o', b'd', b'i', b'n', b'g'] & [b' coding'] & [19617] \\
+14 &  is & [b' ', b'i', b's'] & [b' is'] & [318] \\
+15 &  cheap & [b' ', b'c', b'h', b'e', b'a', b'p'] & [b' cheap'] & [7026] \\
+16 &  show & [b' ', b's', b'h', b'o', b'w'] & [b' show'] & [905] \\
+17 &  me & [b' ', b'm', b'e'] & [b' me'] & [502] \\
+18 &  your & [b' ', b'y', b'o', b'u', b'r'] & [b' your'] & [534] \\
+19 &  prompt & [b' ', b'p', b'r', b'o', b'm', b'p', b't'] & [b' prompt'] & [6152] \\
+20 & . & [b'.'] & [b'.'] & [13] \\
+21 &  Attention & [b' ', b'A', b't', b't', b'e', b'n', b't', b'i', b'o', b'n'] & [b' Attention'] & [47406] \\
+22 &  is & [b' ', b'i', b's'] & [b' is'] & [318] \\
+23 &  all & [b' ', b'a', b'l', b'l'] & [b' all'] & [477] \\
+24 &  you & [b' ', b'y', b'o', b'u'] & [b' you'] & [345] \\
+25 &  need & [b' ', b'n', b'e', b'e', b'd'] & [b' need'] & [761] \\
+26 & . & [b'.'] & [b'.'] & [13] \\
+\bottomrule
+\end{longtable}
+
+这个表能直接看出几个现象：
+\begin{itemize}[leftmargin=2em]
+  \item GPT-2 风格 tokenizer 会把空格和后面的词绑在一起，例如 \texttt{' world'}、\texttt{' cheap'}、\texttt{' Attention'}
+  \item \texttt{Talkking} 这种不规范拼写没有直接合成一个 token，而是被拆成了 \texttt{b' Talk'} 与 \texttt{b'king'}
+  \item 标点 \texttt{, ! .} 直接以单字节形式进入词表
+\end{itemize}
+
+\subsection{更细的内部 trace：\texttt{hello}}
+下面我把 \texttt{merge\_pretoken} 内部每一轮的变化完整写出来。
+
+\begin{lstlisting}
+unit='hello'
+pretoken_to_byte_tokens -> [b'h', b'e', b'l', b'l', b'o']
+
+step 0 candidate_pairs -> [(b'h', b'e'), (b'e', b'l'), (b'l', b'l'), (b'l', b'o')]
+step 0 mergeable_pairs -> [((b'h', b'e'), 2), ((b'e', b'l'), 161), ((b'l', b'l'), 41), ((b'l', b'o'), 5183)]
+step 0 best_pair -> (b'h', b'e'), rank=2
+step 0 after merge_pair_in_sequence -> [b'he', b'l', b'l', b'o']
+
+step 1 candidate_pairs -> [(b'he', b'l'), (b'l', b'l'), (b'l', b'o')]
+step 1 mergeable_pairs -> [((b'he', b'l'), 2722), ((b'l', b'l'), 41), ((b'l', b'o'), 5183)]
+step 1 best_pair -> (b'l', b'l'), rank=41
+step 1 after merge_pair_in_sequence -> [b'he', b'll', b'o']
+
+step 2 candidate_pairs -> [(b'he', b'll'), (b'll', b'o')]
+step 2 mergeable_pairs -> [((b'he', b'll'), 12502), ((b'll', b'o'), 18542)]
+step 2 best_pair -> (b'he', b'll'), rank=12502
+step 2 after merge_pair_in_sequence -> [b'hell', b'o']
+
+step 3 candidate_pairs -> [(b'hell', b'o')]
+step 3 mergeable_pairs -> [((b'hell', b'o'), 31117)]
+step 3 best_pair -> (b'hell', b'o'), rank=31117
+step 3 after merge_pair_in_sequence -> [b'hello']
+
+final merged parts -> [b'hello']
+token_to_id lookup -> [31373]
+\end{lstlisting}
+
+\subsection{更细的内部 trace：\texttt{ Talkking}}
+这个例子比 \texttt{hello} 更有代表性，因为它不会 merge 到单一 token，而是停在两个 token 上。
+
+\begin{lstlisting}
+unit=' Talkking'
+pretoken_to_byte_tokens -> [b' ', b'T', b'a', b'l', b'k', b'k', b'i', b'n', b'g']
+
+step 0 best_pair -> (b'i', b'n'), rank=3
+after -> [b' ', b'T', b'a', b'l', b'k', b'k', b'in', b'g']
+
+step 1 best_pair -> (b'in', b'g'), rank=22
+after -> [b' ', b'T', b'a', b'l', b'k', b'k', b'ing']
+
+step 2 best_pair -> (b'a', b'l'), rank=26
+after -> [b' ', b'T', b'al', b'k', b'k', b'ing']
+
+step 3 best_pair -> (b' ', b'T'), rank=53
+after -> [b' T', b'al', b'k', b'k', b'ing']
+
+step 4 best_pair -> (b'al', b'k'), rank=715
+after -> [b' T', b'alk', b'k', b'ing']
+
+step 5 best_pair -> (b'k', b'ing'), rank=3108
+after -> [b' T', b'alk', b'king']
+
+step 6 best_pair -> (b' T', b'alk'), rank=11911
+after -> [b' Talk', b'king']
+
+step 7 no mergeable pair, stop
+final merged parts -> [b' Talk', b'king']
+token_to_id lookup -> [12167, 3364]
+\end{lstlisting}
+
+\subsection{更细的内部 trace：\texttt{ Attention}}
+\begin{lstlisting}
+unit=' Attention'
+pretoken_to_byte_tokens -> [b' ', b'A', b't', b't', b'e', b'n', b't', b'i', b'o', b'n']
+
+step 0 best_pair -> (b'o', b'n'), rank=5
+after -> [b' ', b'A', b't', b't', b'e', b'n', b't', b'i', b'on']
+
+step 1 best_pair -> (b'e', b'n'), rank=12
+after -> [b' ', b'A', b't', b't', b'en', b't', b'i', b'on']
+
+step 2 best_pair -> (b'i', b'on'), rank=39
+after -> [b' ', b'A', b't', b't', b'en', b't', b'ion']
+
+step 3 best_pair -> (b'en', b't'), rank=42
+after -> [b' ', b'A', b't', b't', b'ent', b'ion']
+
+step 4 best_pair -> (b' ', b'A'), rank=61
+after -> [b' A', b't', b't', b'ent', b'ion']
+
+step 5 best_pair -> (b't', b't'), rank=670
+after -> [b' A', b'tt', b'ent', b'ion']
+
+step 6 best_pair -> (b'ent', b'ion'), rank=1207
+after -> [b' A', b'tt', b'ention']
+
+step 7 best_pair -> (b' A', b'tt'), rank=3204
+after -> [b' Att', b'ention']
+
+step 8 best_pair -> (b' Att', b'ention'), rank=47150
+after -> [b' Attention']
+
+final merged parts -> [b' Attention']
+token_to_id lookup -> [47406]
+\end{lstlisting}
+
+\subsection{最终编码结果}
+整段文本的最终 id 序列是：
+\begin{lstlisting}
+[31373, 11, 995, 0, 12167, 3364, 318, 7026, 11, 905, 502, 534, 2438, 11, 19617, 318, 7026, 905, 502, 534, 6152, 13, 47406, 318, 477, 345, 761, 13]
+\end{lstlisting}
+
+再调用 \texttt{decode} 之后：
+\begin{lstlisting}
+hello, world! Talkking is cheap, show me your code, coding is cheap show me your prompt. Attention is all you need.
+\end{lstlisting}
+
+说明 round-trip 是正确的。
+
+\section{训练路径的调用栈}
+虽然上面的 example 主要展示的是编码，但训练路径同样重要。我的训练调用栈是：
+\begin{lstlisting}
+run_train_bpe
+  -> train_bpe
+     -> normalize_special_tokens
+     -> _collect_pretoken_counts
+        -> iter_text_units
+           -> split_special_tokens
+           -> pretokenize_text
+        -> pretoken_to_byte_tokens
+     -> _build_pair_statistics
+        -> _sequence_pair_counts
+     -> while loop:
+        -> choose best_pair from pair_counts
+        -> _remove_sequence_from_pair_index
+        -> merge_pair_in_sequence
+        -> _sequence_pair_counts
+     -> return vocab, merges
+\end{lstlisting}
+
+\section{测试命令与结果}
+\subsection{语法检查}
+\begin{lstlisting}[language=bash]
+./.venv/bin/python -m py_compile cs336_basics/tokenizer.py
+\end{lstlisting}
+
+这条命令没有输出，说明文件能被正常编译。
+
+\subsection{速度测试}
+\begin{lstlisting}[language=bash]
+./.venv/bin/python -m pytest tests/test_train_bpe.py::test_train_bpe_speed
+\end{lstlisting}
+
+结果：
+\begin{lstlisting}
+tests/test_train_bpe.py::test_train_bpe_speed PASSED
+========================= 1 passed in 0.28s =========================
+\end{lstlisting}
+
+\subsection{完整 tokenizer 测试}
+\begin{lstlisting}[language=bash]
+./.venv/bin/python -m pytest tests/test_tokenizer.py tests/test_train_bpe.py
+\end{lstlisting}
+
+结果：
+\begin{lstlisting}
+======================== 27 passed, 1 xfailed in 12.05s ========================
+\end{lstlisting}
+
+这里的 \texttt{xfailed} 是测试本身标记的预期失败项，不是我的实现出错。
+
+\section{我对这份实现的总结}
+从工程角度看，这份 tokenizer 的关键不是把 \texttt{encode} 写出来，而是同时把下面几件事处理干净：
+\begin{enumerate}[leftmargin=2em]
+  \item 统一使用 \texttt{bytes} 作为内部 token 表示
+  \item special token 只做边界，不参与 merge 学习
+  \item 编码时严格按 merge rank 从小到大反复应用
+  \item 训练时通过增量更新避免每轮全量重算
+  \item 通过 adapter 把课程测试接口和自己的实现解耦
+\end{enumerate}
+
+如果只看 API，这个 tokenizer 其实很简单：\texttt{from\_files}、\texttt{encode}、\texttt{encode\_iterable}、\texttt{decode}。但如果真的把它从 0 实现出来，就会发现它本质上是一个分层很清晰的系统：
+\begin{itemize}[leftmargin=2em]
+  \item 文本分段层决定边界
+  \item 字节层决定最小表示单位
+  \item BPE 层决定 merge 规则
+  \item 训练层决定如何得到这些规则
+  \item adapter 层决定它怎样被测试框架调用
+\end{itemize}
+
+对我来说，这一版实现最大的收获不是“我写了一个 tokenizer”，而是我第一次把 \textbf{字符串处理、字节级建模、贪心 merge、增量统计和测试接线} 这几件原本分散的事情，连成了一条完整的工程链路。
+
+\end{document}
