@@ -1,0 +1,948 @@
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs,longtable,array}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{multirow}
+\usepackage{caption}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black
+}
+
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue!70!black},
+  commentstyle=\color{green!40!black},
+  stringstyle=\color{orange!50!black},
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!5},
+  columns=fullflexible
+}
+
+\setcounter{tocdepth}{3}
+
+\title{CS336 Assignment 1 实现报告}
+\author{项目路径：\texttt{assignment1-basics}}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Assignment 1 概述}
+
+\subsection{完成内容、最终目的与总体结论}
+本次 Assignment 1 的核心目标，是从零搭建一个\textbf{decoder-only Transformer LM} 的最小可运行实现链条：先用 \textbf{byte-level BPE} 完成文本到 token 的映射，再实现训练阶段所需的\textbf{数据加载、损失函数、优化器、学习率调度、梯度裁剪与 checkpointing}，最后实现 \textbf{注意力、RoPE、Transformer Block 与 Transformer LM}。从工程结构上看，这个作业实际上把一个小型 LLM 训练系统拆成了若干可独立验证的组件，并要求每个组件都能在统一的测试入口上工作。
+
+本报告聚焦于 \textbf{代码型 deliverables}。也就是说，本报告覆盖了下列 handout 中与代码直接相关的部分：
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{train\_bpe}, \texttt{tokenizer}
+  \item \texttt{linear}, \texttt{embedding}, \texttt{rmsnorm}, \texttt{positionwise\_feedforward}
+  \item \texttt{rope}, \texttt{softmax}, \texttt{scaled\_dot\_product\_attention}, \texttt{multihead\_self\_attention}
+  \item \texttt{transformer\_block}, \texttt{transformer\_lm}
+  \item \texttt{cross\_entropy}, \texttt{adamw}, \texttt{learning\_rate\_schedule}, \texttt{gradient\_clipping}
+  \item \texttt{data\_loading}, \texttt{checkpointing}
+\end{itemize}
+
+最终结果是：本地完整测试集达到
+\[
+\boxed{47\ \text{passed},\ 1\ \text{xfailed}}
+\]
+其中唯一的 \texttt{xfailed} 是测试中\textbf{显式标记的预期失败项}，并不表示实现错误。完整测试命令的 wall-clock 时间约为 \(15.04\) 秒，而 pytest 报告的测试执行时间为 \(13.04\) 秒。
+
+\subsection{关键测试命令}
+表 \ref{tab:key-commands} 给出了本次实现过程中最常用的验证命令。
+
+\begin{table}[H]
+\centering
+\caption{关键测试命令}
+\label{tab:key-commands}
+\begin{tabular}{p{0.34\textwidth} p{0.58\textwidth}}
+\toprule
+命令 & 用途 \\
+\midrule
+\texttt{./.venv/bin/python -m pytest -q} & 运行完整测试集，验证所有组件集成后的最终状态。 \\
+\texttt{./.venv/bin/python -m pytest -k test\_train\_bpe\_speed} & 专门验证 BPE 训练的速度约束。 \\
+\texttt{./.venv/bin/python -m pytest -k test\_get\_lr\_cosine\_schedule} & 验证 warmup + cosine decay 学习率调度。 \\
+\texttt{./.venv/bin/python -m pytest -k 'test\_rope or test\_multihead\_self\_attention\_with\_rope'} & 验证 RoPE 与带 RoPE 的 MHA。 \\
+\texttt{./.venv/bin/python -m pytest -k 'test\_transformer\_block or test\_transformer\_lm'} & 验证 Block 与 LM 级别的集成正确性。 \\
+\texttt{./.venv/bin/python -m py\_compile ...} & 在运行单测前先做语法级静态检查。 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{代码结构概览}
+最终代码主要位于 \texttt{cs336\_basics} 目录中，形成了如下功能分层：
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Tokenizer 层}：\texttt{tokenizer.py}
+  \item \textbf{基础张量算子}：\texttt{linear.py}, \texttt{embedding.py}, \texttt{silu.py}, \texttt{rmsnorm.py}, \texttt{swiglu.py}
+  \item \textbf{注意力层}：\texttt{softmax.py}, \texttt{scaled\_dot\_product\_attention.py}, \texttt{rope.py}, \texttt{multihead\_self\_attention.py}, \texttt{multihead\_self\_attention\_with\_rope.py}
+  \item \textbf{模型组装层}：\texttt{transformer\_block.py}, \texttt{transformer\_lm.py}
+  \item \textbf{训练工具层}：\texttt{get\_batch.py}, \texttt{cross\_entropy.py}, \texttt{gradient\_clipping.py}, \texttt{AdamW.py}, \texttt{lr\_schedule.py}, \texttt{save\_load\_checkpoint.py}
+\end{itemize}
+
+\newpage
+\section{组件级实现说明}
+
+\subsection{Tokenizer 与数据预处理}
+
+\subsubsection{组件：\texttt{train\_bpe}}
+\paragraph{1. 作用、输入与输出}
+该组件用于从原始文本语料训练 \textbf{byte-level BPE}。输入为文本路径 \texttt{input\_path}、目标词表大小 \texttt{vocab\_size} 与可选的 \texttt{special\_tokens}；输出为
+\[
+\texttt{vocab}: \{ \texttt{id} \mapsto \texttt{bytes} \}, \qquad
+\texttt{merges}: [(b_1,b_2), \dots]
+\]
+其中 \texttt{vocab} 是 token id 到字节串的映射，\texttt{merges} 是按学习顺序记录的 merge 规则。
+
+\paragraph{2. 代码实现摘要}
+核心代码如下：
+\begin{lstlisting}
+token_counts = _collect_pretoken_counts(text, normalized_special_tokens)
+pair_counts, pair_to_sequences = _build_pair_statistics(token_counts)
+
+while len(vocab) < vocab_size:
+    best_pair = max(pair_counts.items(), key=lambda item: (item[1], item[0]))[0]
+    affected_sequences = list(pair_to_sequences.get(best_pair, ()))
+    ...
+\end{lstlisting}
+实现流程是：
+\begin{enumerate}[leftmargin=2em]
+  \item 用 GPT-2 风格 regex 做 pre-tokenization；
+  \item 将每个 pretoken 转为 UTF-8 字节序列；
+  \item 统计所有相邻 pair 的频次；
+  \item 反复选出最高频 pair 做 merge；
+  \item 更新词表与 merge 序列，直到达到目标词表大小。
+\end{enumerate}
+
+\paragraph{3. 数学原理}
+如果把某个 pretoken 写成 token 序列
+\[
+t = (u_1, u_2, \dots, u_n),
+\]
+则 BPE 在每一轮选择
+\[
+(u^\ast, v^\ast) = \arg\max_{(u,v)} \Big( c(u,v),\ (u,v) \Big),
+\]
+其中 \(c(u,v)\) 是 pair \((u,v)\) 在整个语料中的总频次；当频次并列时，再按 pair 的字典序做 tie-break。选中后执行
+\[
+u^\ast, v^\ast \longrightarrow u^\ast v^\ast.
+\]
+代码中的
+\begin{lstlisting}
+best_pair = max(pair_counts.items(), key=lambda item: (item[1], item[0]))[0]
+\end{lstlisting}
+正对应这个规则。
+
+\paragraph{4. 工程技巧}
+这一部分用了最重要的工程优化：\textbf{增量维护 pair 统计}。初版做法是在每一轮 merge 后对全部 token sequence 重新统计 pair 频次，复杂度较高，导致 \texttt{test\_train\_bpe\_speed} 失败。最终版本维护了：
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{pair\_counts}：全局 pair 频次；
+  \item \texttt{pair\_to\_sequences}：pair 到包含该 pair 的 sequence 的反向索引。
+\end{itemize}
+这样每轮只更新受到当前 \texttt{best\_pair} 影响的序列，而不必全量重扫整个语料。
+
+\subsubsection{组件：\texttt{Tokenizer}}
+\paragraph{1. 作用、输入与输出}
+\texttt{Tokenizer} 负责在\textbf{文本与 token id 序列}之间建立双向映射。输入包括：
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{vocab: dict[int, bytes]}
+  \item \texttt{merges: list[tuple[bytes, bytes]]}
+  \item \texttt{special\_tokens: Sequence[str] | None}
+\end{itemize}
+输出行为则由以下接口提供：
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{encode(text)}：\(\texttt{str} \to \texttt{list[int]}\)
+  \item \texttt{decode(ids)}：\(\texttt{list[int]} \to \texttt{str}\)
+  \item \texttt{encode\_iterable(iterable)}：流式编码文本块
+  \item \texttt{from\_files(...)}：从 GPT-2 风格词表文件恢复 tokenizer
+\end{itemize}
+
+\paragraph{2. 代码实现摘要}
+\texttt{encode} 的核心结构是：
+\begin{lstlisting}
+for is_special, unit in iter_text_units(text, self.special_tokens):
+    if is_special:
+        token_ids.append(self.special_token_to_id[unit])
+    else:
+        token_ids.extend(self._encode_pretoken_to_ids(unit))
+\end{lstlisting}
+\texttt{decode} 的核心结构是：
+\begin{lstlisting}
+token_bytes = [self.vocab[token_id] for token_id in ids]
+return b"".join(token_bytes).decode("utf-8", errors="replace")
+\end{lstlisting}
+\texttt{encode\_iterable} 则维护一个 \texttt{buffer}，在 chunk 边界上保留不稳定尾部，确保跨 chunk 的 pretoken / special token 不被错误拆开。
+
+\paragraph{3. 数学原理}
+编码过程本质上是复合映射：
+\[
+\text{text}
+\xrightarrow{\text{special split}}
+\text{units}
+\xrightarrow{\text{pretokenize}}
+\text{pretokens}
+\xrightarrow{\text{BPE merge}}
+\text{byte tokens}
+\xrightarrow{\text{lookup}}
+\text{ids}.
+\]
+解码过程则是
+\[
+(i_1, i_2, \dots, i_n)
+\xrightarrow{\text{vocab lookup}}
+(b_1, b_2, \dots, b_n)
+\xrightarrow{\text{concat}}
+b
+\xrightarrow{\text{utf-8 decode}}
+\text{text}.
+\]
+
+\paragraph{4. 工程技巧}
+这里用了两点工程技巧：
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{重叠 special token 的长度优先匹配}：通过按长度降序排序 special token，解决短 token 抢先匹配的问题；
+  \item \textbf{流式编码的稳定尾部分离}：\texttt{encode\_iterable} 不会简单地对每个 chunk 直接编码，而是保留 chunk 末尾可能跨边界延续的 pretoken。
+\end{itemize}
+
+\subsubsection{组件：\texttt{get\_batch}}
+\paragraph{1. 作用、输入与输出}
+\texttt{get\_batch} 从一维 token 序列中随机抽取训练样本。输入是
+\[
+\texttt{dataset},\ \texttt{batch\_size},\ \texttt{context\_length},\ \texttt{device},
+\]
+输出是两个 shape 都为
+\[
+(\texttt{batch\_size}, \texttt{context\_length})
+\]
+的 tensor：
+\[
+X,\ Y.
+\]
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+start_indices = np.random.randint(0, num_possible_starts, size=batch_size, dtype=np.int64)
+offsets = np.arange(context_length + 1, dtype=np.int64)
+batch_np = dataset[start_indices[:, None] + offsets[None, :]]
+x = batch[:, :-1]
+y = batch[:, 1:]
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+设一维 token 流为
+\[
+(x_0, x_1, \dots, x_{N-1}),
+\]
+随机抽取起点 \(s_i\) 后，定义：
+\[
+X_i = (x_{s_i}, x_{s_i+1}, \dots, x_{s_i+L-1}),
+\]
+\[
+Y_i = (x_{s_i+1}, x_{s_i+2}, \dots, x_{s_i+L}),
+\]
+其中 \(L = \texttt{context\_length}\)。这就是标准 next-token prediction 训练对。
+
+\paragraph{4. 工程技巧}
+实现里一次性取出长度 \(L+1\) 的窗口块，然后再切成 \(X\) 与 \(Y\)。这样只做一次 gather；同时 CUDA 路径下使用了 \texttt{pin\_memory} 与 \texttt{non\_blocking=True}。
+
+\subsection{基础算子与前馈网络}
+
+\subsubsection{组件：\texttt{linear}}
+\paragraph{1. 作用、输入与输出}
+\texttt{linear} 实现线性层。输入是权重
+\[
+W \in \mathbb{R}^{d_{\text{out}} \times d_{\text{in}}}
+\]
+和特征
+\[
+X \in \mathbb{R}^{\cdots \times d_{\text{in}}},
+\]
+输出
+\[
+Y \in \mathbb{R}^{\cdots \times d_{\text{out}}}.
+\]
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+return in_features @ weights.transpose(-1, -2)
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+\[
+Y = X W^\top.
+\]
+因为代码中 \texttt{weights} 的存储形式是 \((d_{\text{out}}, d_{\text{in}})\)，所以在右乘前需要转置。
+
+\subsubsection{组件：\texttt{embedding}}
+\paragraph{1. 作用、输入与输出}
+\texttt{embedding} 根据 token id 取词向量。输入是
+\[
+W \in \mathbb{R}^{V \times d_{\text{model}}}, \qquad \texttt{token\_ids} \in \mathbb{N}^{\cdots}
+\]
+输出
+\[
+E \in \mathbb{R}^{\cdots \times d_{\text{model}}}.
+\]
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+return weights[token_ids]
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+这是典型的查表操作：
+\[
+E_{i} = W[\texttt{token\_id}_i].
+\]
+
+\subsubsection{组件：\texttt{silu}}
+\paragraph{1. 作用、输入与输出}
+逐元素非线性激活，输入输出 shape 完全一致。
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+return in_features * torch.sigmoid(in_features)
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+\[
+\mathrm{SiLU}(x) = x \cdot \sigma(x), \qquad
+\sigma(x)=\frac{1}{1+e^{-x}}.
+\]
+
+\subsubsection{组件：\texttt{rmsnorm}}
+\paragraph{1. 作用、输入与输出}
+对最后一个维度执行 RMSNorm。输入是特征 \(x\) 与可学习缩放参数 \(w\)，输出与输入同 shape。
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+rms = torch.sqrt(torch.mean(in_features * in_features, dim=-1, keepdim=True) + eps)
+normalized = in_features / rms
+return normalized * weights
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+对单个向量 \(x \in \mathbb{R}^{d}\)，RMSNorm 定义为
+\[
+\mathrm{RMSNorm}(x)=
+\frac{x}{\sqrt{\frac{1}{d}\sum_{j=1}^{d}x_j^2+\epsilon}}
+\odot w.
+\]
+代码中的 \texttt{torch.mean(in\_features * in\_features, dim=-1)} 对应分母里的均方，随后再乘以 \texttt{weights} 完成仿射缩放。
+
+\subsubsection{组件：\texttt{swiglu}}
+\paragraph{1. 作用、输入与输出}
+\texttt{SwiGLU} 是 Transformer FFN 的核心前馈模块。输入是
+\[
+X \in \mathbb{R}^{\cdots \times d_{\text{model}}},
+\]
+输出仍然是
+\[
+\mathbb{R}^{\cdots \times d_{\text{model}}}.
+\]
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+w1_out = linear(..., weights=w1_weight, in_features=in_features)
+w3_out = linear(..., weights=w3_weight, in_features=in_features)
+gated = silu(w1_out) * w3_out
+return linear(..., weights=w2_weight, in_features=gated)
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+\[
+\mathrm{SwiGLU}(x)=W_2\big(\mathrm{SiLU}(W_1x)\odot (W_3x)\big).
+\]
+其中 \(W_1\) 与 \(W_3\) 都把输入从 \(d_{\text{model}}\) 映射到 \(d_{\text{ff}}\)，而 \(W_2\) 再把中间结果映射回 \(d_{\text{model}}\)。
+
+\subsection{数值计算、优化与训练工程}
+
+\subsubsection{组件：\texttt{softmax}}
+\paragraph{1. 作用、输入与输出}
+沿指定维度 \texttt{dim} 把任意 logits 转成概率分布，输出 shape 与输入完全一致。
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+max_values = torch.amax(in_features, dim=dim, keepdim=True)
+shifted = in_features - max_values
+exp_shifted = torch.exp(shifted)
+partition = torch.sum(exp_shifted, dim=dim, keepdim=True)
+return exp_shifted / partition
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+\[
+\mathrm{softmax}(x)_i = \frac{e^{x_i}}{\sum_j e^{x_j}}.
+\]
+为避免数值溢出，代码先做平移：
+\[
+\tilde{x}_i = x_i - \max_j x_j.
+\]
+由于 softmax 对所有分量同时减去同一个常数不变，因此
+\[
+\mathrm{softmax}(x)=\mathrm{softmax}(\tilde{x}).
+\]
+
+\paragraph{4. 工程技巧}
+这里的关键技巧是\textbf{减去最大值}，这是数值稳定版 softmax 的标准写法。
+
+\subsubsection{组件：\texttt{cross\_entropy}}
+\paragraph{1. 作用、输入与输出}
+对一个 batch 的 logits 与离散标签计算平均交叉熵。输入：
+\[
+Z \in \mathbb{R}^{B \times V}, \qquad y \in \{0,\dots,V-1\}^B.
+\]
+输出是标量 loss。
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+max_values = torch.amax(inputs, dim=-1, keepdim=True)
+shifted = inputs - max_values
+log_sum_exp = torch.log(torch.sum(torch.exp(shifted), dim=-1)) + max_values.squeeze(-1)
+target_logits = inputs.gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
+losses = log_sum_exp - target_logits
+return losses.mean()
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+单样本交叉熵可写成
+\[
+\mathcal{L}(z,y) = -\log\frac{e^{z_y}}{\sum_j e^{z_j}}
+ = \log\sum_j e^{z_j} - z_y.
+\]
+代码中的 \texttt{log\_sum\_exp} 对应前一项，\texttt{target\_logits} 对应后一项。
+
+\paragraph{4. 工程技巧}
+依然采用了\textbf{log-sum-exp 的稳定写法}，避免直接对大 logits 做指数运算。
+
+\subsubsection{组件：\texttt{gradient\_clipping}}
+\paragraph{1. 作用、输入与输出}
+对一组参数梯度做 global \(L_2\) norm clipping，输入是一组参数与阈值 \texttt{max\_l2\_norm}，输出为空，但会\textbf{原地修改} \texttt{param.grad}。
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+params_with_grad = [p for p in parameters if p.grad is not None]
+total_norm = torch.norm(
+    torch.stack([torch.norm(p.grad.detach(), p=2) for p in params_with_grad]),
+    p=2,
+)
+clip_coef = max_l2_norm / (total_norm + 1e-6)
+if clip_coef < 1:
+    for param in params_with_grad:
+        param.grad.mul_(clip_coef)
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+设所有梯度为 \(g_1,\dots,g_n\)，则全局范数为
+\[
+\|g\|_2 = \sqrt{\sum_{i=1}^{n}\|g_i\|_2^2}.
+\]
+若 \(\|g\|_2 > \tau\)，则统一缩放：
+\[
+g_i \leftarrow g_i \cdot \frac{\tau}{\|g\|_2}.
+\]
+
+\paragraph{4. 工程技巧}
+使用 \texttt{mul\_} 做\textbf{原地更新}，避免无意义的新 tensor 分配。
+
+\subsubsection{组件：\texttt{AdamW}}
+\paragraph{1. 作用、输入与输出}
+实现带 decoupled weight decay 的 AdamW 优化器，输入是一组模型参数与超参数 \((lr,\beta_1,\beta_2,\epsilon,\lambda)\)。核心输出是一次 \texttt{step()} 后的参数更新。
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+exp_avg.mul_(beta1).add_(grad, alpha=1.0 - beta1)
+exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1.0 - beta2)
+bias_correction1 = 1.0 - beta1**step
+bias_correction2 = 1.0 - beta2**step
+p.data.mul_(1.0 - lr * weight_decay)
+p.data.addcdiv_(corrected_exp_avg, denom, value=-lr)
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+AdamW 的状态更新为
+\[
+m_t = \beta_1 m_{t-1} + (1-\beta_1) g_t,
+\qquad
+v_t = \beta_2 v_{t-1} + (1-\beta_2) g_t^2.
+\]
+偏置修正为
+\[
+\hat{m}_t = \frac{m_t}{1-\beta_1^t},
+\qquad
+\hat{v}_t = \frac{v_t}{1-\beta_2^t}.
+\]
+最终参数更新为
+\[
+\theta \leftarrow \theta (1 - lr \cdot \lambda)
+ - lr \cdot \frac{\hat{m}_t}{\sqrt{\hat{v}_t} + \epsilon}.
+\]
+其中第一项就是 \textbf{decoupled weight decay}。
+
+\paragraph{4. 工程技巧}
+实现复用了 PyTorch \texttt{Optimizer} 基类的 \texttt{param\_groups} 与 \texttt{state} 机制，使接口与官方优化器一致。
+
+\subsubsection{组件：\texttt{get\_lr\_cosine\_schedule}}
+\paragraph{1. 作用、输入与输出}
+根据当前 iteration \texttt{it} 返回学习率。输入包括最大/最小学习率、warmup 步数和 cosine 衰减总长度，输出是当前步的标量学习率。
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+if warmup_iters > 0 and it < warmup_iters:
+    return max_learning_rate * it / warmup_iters
+if it >= cosine_cycle_iters:
+    return min_learning_rate
+progress = (it - warmup_iters) / (cosine_cycle_iters - warmup_iters)
+cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+该 schedule 是分段函数：
+\[
+\alpha_t =
+\begin{cases}
+\alpha_{\max}\cdot \frac{t}{T_w}, & 0 \le t < T_w, \\
+\alpha_{\min} + \frac{1+\cos(\pi \cdot p_t)}{2}(\alpha_{\max}-\alpha_{\min}), & T_w \le t < T_c, \\
+\alpha_{\min}, & t \ge T_c,
+\end{cases}
+\]
+其中
+\[
+p_t = \frac{t-T_w}{T_c-T_w}.
+\]
+
+\paragraph{4. 工程技巧}
+这里最关键的并不是代码量，而是\textbf{边界定义与测试语义一致}：第 \(0\) 步学习率应为 \(0\)，而不是 \(\alpha_{\max}/T_w\)。
+
+\subsubsection{组件：\texttt{save\_checkpoint} / \texttt{load\_checkpoint}}
+\paragraph{1. 作用、输入与输出}
+保存并恢复训练状态。输入包括模型、优化器与 iteration，输出要么写入文件，要么恢复状态并返回被恢复的 iteration。
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+checkpoint = {
+    "model_state_dict": model.state_dict(),
+    "optimizer_state_dict": optimizer.state_dict(),
+    "iteration": iteration,
+}
+torch.save(checkpoint, out)
+\end{lstlisting}
+加载时：
+\begin{lstlisting}
+checkpoint = torch.load(src, map_location="cpu")
+model.load_state_dict(checkpoint["model_state_dict"])
+optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+return checkpoint["iteration"]
+\end{lstlisting}
+
+\paragraph{4. 工程技巧}
+这里采用 PyTorch 标准的 \texttt{state\_dict} 协议，优点是和模型/优化器内部结构解耦。
+
+\subsection{注意力、位置编码与模型组装}
+
+\subsubsection{组件：\texttt{scaled\_dot\_product\_attention}}
+\paragraph{1. 作用、输入与输出}
+给定
+\[
+Q \in \mathbb{R}^{\cdots \times n_q \times d_k},\quad
+K \in \mathbb{R}^{\cdots \times n_k \times d_k},\quad
+V \in \mathbb{R}^{\cdots \times n_k \times d_v},
+\]
+输出
+\[
+O \in \mathbb{R}^{\cdots \times n_q \times d_v}.
+\]
+\texttt{mask=True} 表示允许注意力流动，\texttt{False} 表示该位置必须被屏蔽。
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+scores = torch.matmul(Q, K.transpose(-1, -2)) / math.sqrt(d_k)
+if mask is not None:
+    scores = scores.masked_fill(~mask, torch.finfo(scores.dtype).min)
+attention_probs = softmax(scores, dim=-1)
+return torch.matmul(attention_probs, V)
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+\[
+\mathrm{Attention}(Q,K,V)=\mathrm{softmax}\left(\frac{QK^\top}{\sqrt{d_k}}\right)V.
+\]
+mask 的实现方式是在 softmax 前把非法位置加上 \(-\infty\)，即：
+\[
+S_{ij} =
+\begin{cases}
+\frac{q_i^\top k_j}{\sqrt{d_k}}, & M_{ij}=\texttt{True}, \\
+-\infty, & M_{ij}=\texttt{False}.
+\end{cases}
+\]
+
+\paragraph{4. 工程技巧}
+注意力实现支持任意数量的\textbf{batch-like 维度}，例如 \((batch, heads, seq, d)\)。
+
+\subsubsection{组件：\texttt{rope}}
+\paragraph{1. 作用、输入与输出}
+RoPE 对 Query 或 Key 的最后一个维度做位置相关旋转，输入输出 shape 相同。
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+x_even = in_query_or_key[..., ::2]
+x_odd = in_query_or_key[..., 1::2]
+rotated_even = x_even * cos - x_odd * sin
+rotated_odd = x_even * sin + x_odd * cos
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+把维度两两分组，记第 \(m\) 对维度对应角度为
+\[
+\phi_m(p)=\frac{p}{\Theta^{2m/d_k}},
+\]
+则对位置 \(p\) 上的向量分量 \((x_{2m},x_{2m+1})\) 做二维旋转：
+\[
+\begin{pmatrix}
+x'_{2m} \\
+x'_{2m+1}
+\end{pmatrix}
+=
+\begin{pmatrix}
+\cos \phi_m(p) & -\sin \phi_m(p) \\
+\sin \phi_m(p) & \cos \phi_m(p)
+\end{pmatrix}
+\begin{pmatrix}
+x_{2m} \\
+x_{2m+1}
+\end{pmatrix}.
+\]
+
+\paragraph{4. 工程技巧}
+在多头注意力中，\textbf{head 维度被当作 batch-like 维度处理}，因此同一套旋转公式可以直接广播到所有 head。
+
+\subsubsection{组件：\texttt{multihead\_self\_attention}}
+\paragraph{1. 作用、输入与输出}
+实现\textbf{因果多头自注意力}。输入为
+\[
+X \in \mathbb{R}^{\cdots \times T \times d_{\text{model}}},
+\]
+输出同样是
+\[
+\mathbb{R}^{\cdots \times T \times d_{\text{model}}}.
+\]
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+q = linear(..., weights=q_proj_weight, in_features=in_features)
+k = linear(..., weights=k_proj_weight, in_features=in_features)
+v = linear(..., weights=v_proj_weight, in_features=in_features)
+q = q.reshape(..., num_heads, q_head_dim).transpose(-3, -2)
+...
+causal_mask = torch.tril(torch.ones(seq_len, seq_len, dtype=torch.bool, device=in_features.device))
+attention_output = scaled_dot_product_attention(Q=q, K=k, V=v, mask=causal_mask)
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+\[
+\mathrm{MHA}(x)=W_O \cdot \mathrm{Concat}(\mathrm{head}_1,\dots,\mathrm{head}_h),
+\]
+其中每个 head 是
+\[
+\mathrm{head}_i = \mathrm{Attention}(Q_i, K_i, V_i).
+\]
+因果约束要求 query 位置 \(i\) 只能看见 \(j \le i\) 的 key，因此 mask 是下三角矩阵。
+
+\paragraph{4. 工程技巧}
+Q/K/V 的投影被实现为\textbf{三个 batched 线性变换}，而不是按 head 循环；这能更好利用张量并行。
+
+\subsubsection{组件：\texttt{multihead\_self\_attention\_with\_rope}}
+\paragraph{1. 作用、输入与输出}
+它是普通因果 MHA 的 RoPE 扩展版本。与上一个组件不同的是：\textbf{只对 Q 和 K 应用 RoPE，不对 V 应用。}
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+q = rope(..., in_query_or_key=q, token_positions=token_positions)
+k = rope(..., in_query_or_key=k, token_positions=token_positions)
+attention_output = scaled_dot_product_attention(Q=q, K=k, V=v, mask=causal_mask)
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+\[
+Q' = \mathrm{RoPE}(Q), \qquad K' = \mathrm{RoPE}(K), \qquad
+\mathrm{Attention}(Q',K',V).
+\]
+这会让注意力分数显式携带相对位置信息。
+
+\subsubsection{组件：\texttt{transformer\_block}}
+\paragraph{1. 作用、输入与输出}
+实现一个\textbf{pre-norm Transformer block}。输入输出 shape 都是
+\[
+\mathbb{R}^{batch \times seq \times d_{\text{model}}}.
+\]
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+x_norm = rmsnorm(..., weights=weights["ln1.weight"], in_features=in_features)
+attn_out = multihead_self_attention_with_rope(..., in_features=x_norm, ...)
+residual = in_features + attn_out
+residual_norm = rmsnorm(..., weights=weights["ln2.weight"], in_features=residual)
+ff_out = swiglu(..., in_features=residual_norm)
+return residual + ff_out
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+令输入为 \(x\)，则 block 的两个子层分别是：
+\[
+y = x + \mathrm{MHA}(\mathrm{RMSNorm}(x)),
+\]
+\[
+z = y + \mathrm{FFN}(\mathrm{RMSNorm}(y)).
+\]
+这里 FFN 实际上就是前面定义的 SwiGLU。
+
+\paragraph{4. 工程技巧}
+采用 \textbf{pre-norm} 结构，而不是 post-norm。这样梯度路径更稳定，也更符合 handout 的要求。
+
+\subsubsection{组件：\texttt{transformer\_lm}}
+\paragraph{1. 作用、输入与输出}
+这是最终的语言模型前向传播。输入是 token id 张量
+\[
+I \in \mathbb{N}^{B \times T},
+\]
+输出是 logits
+\[
+Z \in \mathbb{R}^{B \times T \times V}.
+\]
+
+\paragraph{2. 代码实现摘要}
+\begin{lstlisting}
+hidden = embedding(..., weights=weights["token_embeddings.weight"], token_ids=in_indices)
+for layer_idx in range(num_layers):
+    layer_weights = {...}
+    hidden = transformer_block(..., weights=layer_weights, in_features=hidden)
+hidden = rmsnorm(..., weights=weights["ln_final.weight"], in_features=hidden)
+return linear(..., weights=weights["lm_head.weight"], in_features=hidden)
+\end{lstlisting}
+
+\paragraph{3. 数学原理}
+定义
+\[
+H_0 = \mathrm{Embed}(I),
+\]
+第 \(\ell\) 层 block 为 \(B_\ell\)，则
+\[
+H_{\ell+1} = B_\ell(H_\ell), \qquad \ell=0,\dots,L-1.
+\]
+最后输出
+\[
+Z = H_L^{(\text{final norm})} W_{\text{lm}}^\top.
+\]
+
+\newpage
+\section{测试过程、定位过程与最终结果}
+
+\subsection{测试总流程}
+测试策略采用\textbf{由局部到整体}的方式：
+\begin{enumerate}[leftmargin=2em]
+  \item 先通过 \texttt{py\_compile} 排除语法问题；
+  \item 然后按组件粒度运行单测，例如 \texttt{test\_silu}、\texttt{test\_rmsnorm}、\texttt{test\_rope}；
+  \item 对关键性能约束单独验证，如 \texttt{test\_train\_bpe\_speed}；
+  \item 最后运行完整测试集 \texttt{pytest -q} 做集成回归。
+\end{enumerate}
+
+\subsection{关键问题的定位与修复}
+
+\subsubsection{案例一：学习率调度 warmup 公式与测试定义不一致}
+\paragraph{现象}
+\texttt{test\_get\_lr\_cosine\_schedule} 初次失败，失败用例显示期望序列的开头是
+\[
+[0,\ 0.142857,\ 0.285714,\ \dots]
+\]
+而初版实现把 warmup 写成了
+\[
+\alpha_t = \alpha_{\max}\cdot\frac{t+1}{T_w},
+\]
+因此第 \(0\) 步学习率不是 \(0\)，而是 \(\alpha_{\max}/T_w\)。
+
+\paragraph{定位}
+通过直接阅读 \texttt{tests/test\_optimizer.py} 中的 \texttt{expected\_lrs}，可以明确看出测试采用的是
+\[
+\alpha_t = \alpha_{\max}\cdot\frac{t}{T_w}.
+\]
+因此问题不是余弦退火部分，而是 warmup 起点定义。
+
+\paragraph{修复}
+将 warmup 段修改为：
+\begin{lstlisting}
+if warmup_iters > 0 and it < warmup_iters:
+    return max_learning_rate * it / warmup_iters
+\end{lstlisting}
+修复后，单测
+\texttt{test\_get\_lr\_cosine\_schedule} 通过。
+
+\subsubsection{案例二：BPE 训练性能瓶颈}
+\paragraph{现象}
+\texttt{test\_train\_bpe\_speed} 初次失败，测试内部记录到的训练时间约为 \(2.17\) 秒，而阈值是 \(1.5\) 秒。
+
+\paragraph{定位}
+初版 \texttt{train\_bpe} 每一轮都执行：
+\begin{enumerate}[leftmargin=2em]
+  \item 对全部 token sequence 重新统计 pair 频次；
+  \item 对全部 token sequence 重新执行 merge。
+\end{enumerate}
+这使得复杂度近似变成“merge 轮数 \(\times\) 全语料重扫”，在小语料上也会明显超时。
+
+\paragraph{修复}
+最终版本改成了\textbf{增量统计}：
+\begin{itemize}[leftmargin=2em]
+  \item 用 \texttt{pair\_counts} 保存全局 pair 频次；
+  \item 用 \texttt{pair\_to\_sequences} 保存 pair 到 sequence 的反向索引；
+  \item 每轮只更新包含 \texttt{best\_pair} 的受影响序列。
+\end{itemize}
+修复后，\texttt{test\_train\_bpe\_speed} 通过。单独运行该测试命令时，pytest 报告时间为 \(0.31\) 秒；包含解释器与 pytest 启动开销的 wall-clock 时间约为 \(1.94\) 秒，但测试内部计时已经低于 \(1.5\) 秒阈值。
+
+\subsubsection{案例三：GPT-2 参考对齐测试的可复现化}
+\paragraph{现象}
+tokenizer 对齐测试依赖 \texttt{tiktoken.get\_encoding("gpt2")}。为了让对齐测试在项目内可复现，需要保证 GPT-2 参考资源 \texttt{encoder.json} 与 \texttt{vocab.bpe} 可以被本地稳定读取。
+
+\paragraph{处理方式}
+最终方案是在 \texttt{tests/adapters.py} 顶部初始化本地 \texttt{TIKTOKEN\_CACHE\_DIR}，并把项目内已有的 GPT-2 fixture 写入缓存。其中：
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{encoder.json} 直接使用 \texttt{tests/fixtures/gpt2\_vocab.json}
+  \item \texttt{vocab.bpe} 使用 \texttt{tests/fixtures/gpt2\_merges.txt}，并补写 \texttt{\#version: 0.2} 头
+\end{itemize}
+这样对齐测试比较的是\textbf{实现行为}，而不是外部资源可达性。
+
+\subsection{最终测试矩阵}
+表 \ref{tab:all-tests} 总结了最终测试结果。所有测试均通过，只有 \texttt{test\_encode\_memory\_usage} 是测试中显式标记的 \texttt{xfail}，属于预期行为。
+
+\footnotesize
+\begin{longtable}{p{0.43\textwidth} p{0.12\textwidth} p{0.34\textwidth}}
+\caption{最终测试矩阵}\label{tab:all-tests}\\
+\toprule
+测试名 & 结果 & 说明 \\
+\midrule
+\endfirsthead
+\toprule
+测试名 & 结果 & 说明 \\
+\midrule
+\endhead
+\texttt{test\_get\_batch} & PASS & 数据采样、右移标签与 device 行为正确。 \\
+\texttt{test\_linear} & PASS & 线性层矩阵乘法与 shape 对齐。 \\
+\texttt{test\_embedding} & PASS & Embedding 查表正确。 \\
+\texttt{test\_swiglu} & PASS & 前馈门控结构与参考权重对齐。 \\
+\texttt{test\_scaled\_dot\_product\_attention} & PASS & 2D attention 正确。 \\
+\texttt{test\_4d\_scaled\_dot\_product\_attention} & PASS & batch-like 维度广播正确。 \\
+\texttt{test\_multihead\_self\_attention} & PASS & 因果 MHA 正确。 \\
+\texttt{test\_multihead\_self\_attention\_with\_rope} & PASS & 带 RoPE 的 MHA 正确。 \\
+\texttt{test\_transformer\_lm} & PASS & 完整 LM 前向通过。 \\
+\texttt{test\_transformer\_lm\_truncated\_input} & PASS & 截断输入下的 LM 行为正确。 \\
+\texttt{test\_transformer\_block} & PASS & pre-norm Block 正确。 \\
+\texttt{test\_rmsnorm} & PASS & RMSNorm 数值对齐。 \\
+\texttt{test\_rope} & PASS & 位置旋转编码正确。 \\
+\texttt{test\_silu\_matches\_pytorch} & PASS & SiLU 与 PyTorch 对齐。 \\
+\texttt{test\_softmax\_matches\_pytorch} & PASS & softmax 数值稳定且正确。 \\
+\texttt{test\_cross\_entropy} & PASS & 交叉熵与参考对齐。 \\
+\texttt{test\_gradient\_clipping} & PASS & global norm clipping 行为正确。 \\
+\texttt{test\_adamw} & PASS & AdamW 与参考/官方实现对齐。 \\
+\texttt{test\_get\_lr\_cosine\_schedule} & PASS & warmup + cosine 衰减正确。 \\
+\texttt{test\_checkpointing} & PASS & checkpoint 存取一致。 \\
+\texttt{test\_roundtrip\_empty} & PASS & 空字符串 roundtrip 正确。 \\
+\texttt{test\_empty\_matches\_tiktoken} & PASS & 空输入与 GPT-2 参考一致。 \\
+\texttt{test\_roundtrip\_single\_character} & PASS & 单字符 roundtrip 正确。 \\
+\texttt{test\_single\_character\_matches\_tiktoken} & PASS & 单字符与参考一致。 \\
+\texttt{test\_roundtrip\_single\_unicode\_character} & PASS & 单 Unicode 字符 roundtrip 正确。 \\
+\texttt{test\_single\_unicode\_character\_matches\_tiktoken} & PASS & 单 Unicode 字符与参考一致。 \\
+\texttt{test\_roundtrip\_ascii\_string} & PASS & ASCII 串 roundtrip 正确。 \\
+\texttt{test\_ascii\_string\_matches\_tiktoken} & PASS & ASCII 串与参考一致。 \\
+\texttt{test\_roundtrip\_unicode\_string} & PASS & Unicode 串 roundtrip 正确。 \\
+\texttt{test\_unicode\_string\_matches\_tiktoken} & PASS & Unicode 串与参考一致。 \\
+\texttt{test\_roundtrip\_unicode\_string\_with\_special\_tokens} & PASS & 特殊 token 混合输入 roundtrip 正确。 \\
+\texttt{test\_unicode\_string\_with\_special\_tokens\_matches\_tiktoken} & PASS & 与参考一致。 \\
+\texttt{test\_overlapping\_special\_tokens} & PASS & 重叠 special token 匹配正确。 \\
+\texttt{test\_address\_roundtrip} & PASS & 地址文本 roundtrip 正确。 \\
+\texttt{test\_address\_matches\_tiktoken} & PASS & 地址文本与参考一致。 \\
+\texttt{test\_german\_roundtrip} & PASS & 德文文本 roundtrip 正确。 \\
+\texttt{test\_german\_matches\_tiktoken} & PASS & 德文文本与参考一致。 \\
+\texttt{test\_tinystories\_sample\_roundtrip} & PASS & TinyStories 样本 roundtrip 正确。 \\
+\texttt{test\_tinystories\_matches\_tiktoken} & PASS & TinyStories 样本与参考一致。 \\
+\texttt{test\_encode\_special\_token\_trailing\_newlines} & PASS & 特殊 token 邻接换行的行为正确。 \\
+\texttt{test\_encode\_special\_token\_double\_newline\_non\_whitespace} & PASS & 特殊 token 后双换行且后接文本时行为正确。 \\
+\texttt{test\_encode\_iterable\_tinystories\_sample\_roundtrip} & PASS & 流式编码 roundtrip 正确。 \\
+\texttt{test\_encode\_iterable\_tinystories\_matches\_tiktoken} & PASS & 流式编码与参考一致。 \\
+\texttt{test\_encode\_iterable\_memory\_usage} & PASS & 流式编码满足内存约束。 \\
+\texttt{test\_encode\_memory\_usage} & XFAIL & 预期失败：\texttt{encode} 不是内存优化接口。 \\
+\texttt{test\_train\_bpe\_speed} & PASS & BPE 训练速度满足阈值。 \\
+\texttt{test\_train\_bpe} & PASS & BPE merges / vocab 正确。 \\
+\texttt{test\_train\_bpe\_special\_tokens} & PASS & 特殊 token 边界处理正确。 \\
+\bottomrule
+\end{longtable}
+\normalsize
+
+\subsection{最终汇总}
+最终完整测试命令
+\begin{lstlisting}
+./.venv/bin/python -m pytest -q
+\end{lstlisting}
+得到的最终结果是
+\begin{lstlisting}
+47 passed, 1 xfailed in 13.04s
+\end{lstlisting}
+包含解释器与 pytest 启动开销的 wall-clock 时间约为
+\[
+15.04\ \text{s}.
+\]
+
+\newpage
+\section{关于 LLM 实现的收获与总结}
+
+\subsection{最重要的技术收获}
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{LLM 并不是一个单独的“模型文件”，而是完整的系统链路。} \\
+  从 tokenizer、batch 构造、损失函数、优化器到注意力与 Block 组装，任何一层出错都可能让整体训练失败。
+
+  \item \textbf{工程正确性与数学正确性同等重要。} \\
+  例如 \texttt{softmax} 与 \texttt{cross\_entropy} 的数学公式都很短，但如果不做数值稳定处理，实际训练中会立刻出问题。
+
+  \item \textbf{性能问题不能只靠“更快的机器”掩盖。} \\
+  \texttt{train\_bpe} 的主要瓶颈来自算法结构，而不是单条指令慢。把“全量重扫”改成“增量维护索引”以后，性能才真正改善。
+
+  \item \textbf{自注意力的核心难点在 shape 管理，而不是公式本身。} \\
+  公式
+  \[
+  \mathrm{softmax}\left(\frac{QK^\top}{\sqrt{d_k}}\right)V
+  \]
+  并不复杂，真正容易错的是 head 拆分、batch-like 维度广播、causal mask 的形状，以及 RoPE 应该施加在 \(Q/K\) 而不是 \(V\) 上。
+
+  \item \textbf{Transformer 的稳定训练依赖若干“局部正确的组件约定”。} \\
+  比如 pre-norm、global gradient clipping、AdamW 的 decoupled weight decay、cosine LR schedule 的 warmup 边界，都是看似局部但对整体训练质量有直接影响的设计。
+\end{enumerate}
+
+\subsection{关于 LLM 的理解深化}
+通过手写这一版 Assignment 1，我对 LLM 的理解从“知道结构”进一步推进到了“知道数据和张量是怎样真正流动的”。例如，过去在阅读论文时，\texttt{RoPE}、\texttt{MHA}、\texttt{RMSNorm} 往往被视作已经打包好的模块；但在这次实现中，必须亲自处理如下事实：
+\begin{itemize}[leftmargin=2em]
+  \item tokenization 实际上决定了后续模型要学习的离散表示空间；
+  \item attention 的 mask 语义、softmax 的数值稳定性，会直接影响训练是否可靠；
+  \item Block 与 LM 的实现不是“搭积木”那么简单，而是要求每一层 shape 都严格一致；
+  \item 训练系统的可恢复性（checkpoint）、可控性（lr schedule）、稳定性（gradient clipping）和模型前向本身同样重要。
+\end{itemize}
+
+\subsection{总结}
+从结果上看，这次 Assignment 1 完成了一个\textbf{从 tokenizer 到 Transformer LM 前向、从 batch 到 optimizer step 的完整最小闭环}。如果只从代码规模看，这些函数都不长；但真正困难的部分在于：
+\begin{enumerate}[leftmargin=2em]
+  \item 把 handout 中的数学定义精确地落实为张量操作；
+  \item 保证所有中间接口（shape、dtype、mask 语义、special token 边界）完全一致；
+  \item 用测试驱动的方式把 correctness、numerical stability 和 performance 都收口。
+\end{enumerate}
+
+因此，这份作业最有价值的地方，并不只是“写出了一个小 Transformer”，而是把\textbf{LLM 系统实现中的关键思想、关键接口和关键调试方法}都走了一遍。对后续继续做训练脚本、解码、实验日志和更大规模实验来说，这一版代码已经形成了一个可靠的基础。
+
+\end{document}
