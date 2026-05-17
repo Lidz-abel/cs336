@@ -738,3 +738,273 @@ source llmPart2/bin/activate && mkdir -p benchmark_outputs && log_file='benchmar
 
 - The benchmark script now natively supports rigorous warmup comparisons.
 - We now have the data needed to answer handout `1.1.3(c)` with actual measurements instead of anecdotal explanation.
+
+## 2026-04-21 Phase 13: Current Hardware Re-Inventory
+
+- Status: PASS
+- Purpose: Re-record the current machine hardware for all future assignment2 experiments, without rerunning previously completed benchmark work.
+
+### Commands
+
+```bash
+nvidia-smi --query-gpu=index,name,driver_version,memory.total --format=csv,noheader
+lscpu
+free -h
+df -h "/home/lidz/cs336/code part/part2_systems/assignment2-systems"
+```
+
+### Key Results
+
+- GPU: `8 x NVIDIA GeForce RTX 4090`
+- GPU memory: `24564 MiB` per GPU
+- NVIDIA driver: `590.48.01`
+- CPU: `Intel(R) Xeon(R) Gold 6430`
+- CPU topology: `64` physical cores / `128` logical CPUs / `2` sockets
+- System memory: `1.0 TiB`
+- Available memory at inventory time: `993 GiB`
+- Assignment workspace filesystem: `/dev/sdb1`
+- Available disk for `/home`: `14T`
+
+### Comparison With 2026-04-10 Inventory
+
+- This machine is not the same as the one recorded on `2026-04-10`.
+- Previous inventory:
+  - `4 x NVIDIA RTX A6000`, `49140 MiB` each
+  - `Intel(R) Xeon(R) w7-3455`
+- Current inventory:
+  - `8 x NVIDIA GeForce RTX 4090`, `24564 MiB` each
+  - `Intel(R) Xeon(R) Gold 6430`
+
+### Experiment Boundary
+
+- Do not rerun or overwrite the already completed baseline and warmup experiments from `2026-04-16`; keep them as historical results from the earlier hardware context.
+- Any new measurements taken after `2026-04-21` must explicitly state that they were collected on the current `8 x RTX 4090` machine.
+
+## 2026-04-23 Phase 14: Rebuild Runtime Environment On Current Machine
+
+- Status: PASS
+- Purpose: Rebuild a working assignment2 runtime environment on the current machine, while continuing to use local `cs336-basics` instead of `cs336-basics-standard`.
+
+### Preconditions
+
+- Verified assignment2 root `pyproject.toml` still points to:
+  - `cs336-basics = { path = "./cs336-basics", editable = true }`
+- Confirmed the old `llmPart2` environment was not usable on this machine because its `pyvenv.cfg` still referenced:
+  - `/home/u-lidz/anaconda3/bin`
+
+### Command
+
+```bash
+UV_PROJECT_ENVIRONMENT=llmPart2_runtime llmPart2/bin/uv sync --python /usr/bin/python3 --frozen
+```
+
+### Key Results
+
+- Created a fresh runtime environment at:
+  - `assignment2-systems/llmPart2_runtime`
+- Synced `75` packages successfully
+- Installed editable local packages:
+  - `cs336-basics==1.0.3` from `./cs336-basics`
+  - `cs336-systems==1.0.5` from current assignment2 root
+- Installed key runtime packages:
+  - `torch==2.6.0`
+  - `triton==3.2.0`
+  - `pytest==8.4.1`
+
+### Validation
+
+```bash
+llmPart2_runtime/bin/python -c "import cs336_basics, torch, triton; print({'cs336_basics': cs336_basics.__file__, 'torch': torch.__version__, 'triton': triton.__version__, 'cuda_available': torch.cuda.is_available(), 'cuda_device_count': torch.cuda.device_count()})"
+```
+
+### Validation Result
+
+- `cs336_basics` imports from:
+  - `/home/lidz/cs336/code part/part2_systems/assignment2-systems/cs336-basics/cs336_basics/__init__.py`
+- `torch == 2.6.0+cu124`
+- `triton == 3.2.0`
+- CUDA visible device count: `8`
+
+## 2026-04-23 Phase 15: Extend `benchmark.py` For Mixed Precision And Memory Profiling
+
+- Status: PASS
+- Purpose: Add the code paths required for assignment `1.1.5 mixed precision` and `1.1.6 memory profiling`, without changing the existing baseline benchmark behavior.
+
+### Code Changes
+
+- Updated [benchmark.py](/home/lidz/cs336/code%20part/part2_systems/assignment2-systems/benchmark.py)
+
+### New Capabilities
+
+- Added `--mixed-precision {none,bf16}`
+- Added CUDA autocast support for benchmark execution
+- Added `--memory-profile`
+- Added `--memory-history-max-entries`
+- Added `--memory-snapshot-path`
+- Added peak memory summary output:
+  - `peak_memory_allocated_mb`
+  - `peak_memory_reserved_mb`
+- Added support for explicit device strings such as:
+  - `cuda:0`
+  - `cuda:7`
+
+### Implementation Notes
+
+- Mixed precision is enabled only through CUDA autocast.
+- Model parameters remain in `torch.float32`; autocast changes op execution dtype where appropriate.
+- Memory history recording begins after warmup and covers the measurement phase only.
+- Snapshot dumping uses `torch.cuda.memory._dump_snapshot(...)`.
+
+## 2026-04-23 Phase 16: Mixed Precision Accumulation Experiment
+
+- Status: PASS
+- Purpose: Execute the assignment `mixed_precision_accumulation` experiment and record the numerical behavior before the larger BF16 benchmark sweep.
+
+### Command
+
+```bash
+llmPart2_runtime/bin/python - <<'PY'
+import torch
+
+s = torch.tensor(0, dtype=torch.float32)
+for _ in range(1000):
+    s += torch.tensor(0.01, dtype=torch.float32)
+print('fp32_accum_fp32_input', float(s))
+
+s = torch.tensor(0, dtype=torch.float16)
+for _ in range(1000):
+    s += torch.tensor(0.01, dtype=torch.float16)
+print('fp16_accum_fp16_input', float(s))
+
+s = torch.tensor(0, dtype=torch.float32)
+for _ in range(1000):
+    s += torch.tensor(0.01, dtype=torch.float16)
+print('fp32_accum_fp16_input', float(s))
+
+s = torch.tensor(0, dtype=torch.float32)
+for _ in range(1000):
+    x = torch.tensor(0.01, dtype=torch.float16)
+    s += x.type(torch.float32)
+print('fp32_accum_casted_fp16_input', float(s))
+PY
+```
+
+### Results
+
+- `fp32_accum_fp32_input = 10.000133514404297`
+- `fp16_accum_fp16_input = 9.953125`
+- `fp32_accum_fp16_input = 10.00213623046875`
+- `fp32_accum_casted_fp16_input = 10.00213623046875`
+
+### Observation
+
+- Low-precision accumulation is visibly less accurate than FP32 accumulation.
+- Keeping the accumulator in FP32 preserves most of the accuracy, even when the inputs originate in FP16.
+
+## 2026-04-23 Phase 17: GPU Resource Gate Before Formal Mixed Precision / Memory Runs
+
+- Status: BLOCKED
+- Purpose: Enforce a GPU availability check before each benchmark/profiling run and defer formal measurements if the machine is saturated.
+
+### GPU Check Commands
+
+```bash
+nvidia-smi --query-gpu=index,name,memory.used,memory.free,utilization.gpu,temperature.gpu --format=csv,noheader
+nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader
+```
+
+### Observed State
+
+- All `8` GPUs were occupied by another user's long-running Python workload.
+- Representative state during the attempted `2026-04-23` session:
+  - GPU memory used per card: roughly `21-22.5 GiB`
+  - Free memory per card: roughly `1.5-3.1 GiB`
+  - GPU utilization per card: roughly `92%-100%`
+- Active compute processes were all from:
+  - `/home/u-liujc/anaconda3/envs/dllm-rl/bin/python`
+
+### Decision
+
+- Postpone the formal `1.1.5(c)` BF16 benchmark sweep and the formal `1.1.6` memory profiling runs until GPUs are no longer saturated.
+- Do not record timing or memory measurements collected under this contention as formal assignment results.
+
+## 2026-04-27 Phase 18: Current Hardware And GPU Availability Check
+
+- Status: PASS
+- Purpose: Record the current hardware and GPU availability before resuming formal assignment2 benchmark/profiling work.
+- Timestamp: `2026-04-27 15:29:31 CST +0800`
+
+### Commands
+
+```bash
+nvidia-smi --query-gpu=index,name,driver_version,memory.total,memory.used,memory.free,utilization.gpu,temperature.gpu --format=csv,noheader
+nvidia-smi --query-compute-apps=gpu_uuid,pid,process_name,used_memory --format=csv,noheader
+lscpu
+free -h
+df -h '/home/lidz/cs336/code part/part2_systems/assignment2-systems'
+```
+
+### Key Results
+
+- GPU: `8 x NVIDIA GeForce RTX 4090`
+- NVIDIA driver: `590.48.01`
+- GPU memory: `24564 MiB` per GPU
+- Current GPU state:
+  - Memory used: `15 MiB` per GPU
+  - Free memory: `24069 MiB` per GPU
+  - GPU utilization: `0%` on all 8 GPUs
+  - Temperature range: `21-24 C`
+- Active GPU compute processes: none reported by `nvidia-smi --query-compute-apps`
+- CPU: `Intel(R) Xeon(R) Gold 6430`
+- CPU topology:
+  - `2` sockets
+  - `32` cores per socket
+  - `2` threads per core
+  - `128` logical CPUs total
+- NUMA nodes: `2`
+- System memory:
+  - Total: `1.0 Ti`
+  - Used: `20 Gi`
+  - Free: `711 Gi`
+  - Available: `987 Gi`
+- Swap:
+  - Total: `8.0 Gi`
+  - Used: `160 Ki`
+- Assignment workspace filesystem:
+  - Mount: `/home`
+  - Device: `/dev/sdb1`
+  - Size: `15T`
+  - Used: `386G`
+  - Available: `14T`
+  - Use: `3%`
+
+### Experiment Boundary
+
+- Unlike the blocked `2026-04-23` check, the GPUs are currently available for formal benchmark and memory profiling runs.
+- Future measurements taken from this point should state that they were collected on the `8 x RTX 4090`, `24564 MiB/GPU`, driver `590.48.01` machine.
+
+
+## 2026-04-27 Formal Current-Hardware Benchmark Run `2026-04-27_rtx4090_formal`
+
+- Status: PASS
+- Purpose: Run the formal current-hardware benchmark sequence through baseline, warmup sweep, BF16 mixed precision, and memory profiling.
+- Hardware context: `8 x NVIDIA GeForce RTX 4090`, `24564 MiB/GPU`, NVIDIA driver `590.48.01`.
+- Output directory: `benchmark_outputs/2026-04-27_rtx4090_formal`
+- Normalized report: `benchmark_outputs/2026-04-27_rtx4090_formal/RESULTS.md`
+- CSV summary: `benchmark_outputs/2026-04-27_rtx4090_formal/summary.csv`
+- Markdown summary: `benchmark_outputs/2026-04-27_rtx4090_formal/summary.md`
+
+### Phase Summary
+
+| phase | pass | oom | fail |
+|---|---:|---:|---:|
+| `01_baseline_fp32` | 9 | 1 | 0 |
+| `02_warmup_sweep_fp32` | 36 | 4 | 0 |
+| `03_mixed_precision_bf16` | 9 | 1 | 0 |
+| `04_memory_profiling` | 6 | 6 | 0 |
+
+### Notes
+
+- OOM results are recorded as expected hardware-bound outcomes, not script failures.
+- The run script keeps a per-GPU worker queue so available GPUs continue receiving work until the fourth phase completes.
+- Use `RESULTS.md` as the human-readable report, `summary.csv` for machine-readable results, and the per-task logs for stderr, OOM traces, and raw benchmark output.

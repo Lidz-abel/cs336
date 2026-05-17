@@ -5,6 +5,7 @@ import re
 import statistics
 import subprocess
 import sys
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from timeit import default_timer
@@ -68,8 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--device",
         default="auto",
-        choices=("auto", "cpu", "cuda"),
-        help="Execution device. 'auto' selects CUDA when available.",
+        help="Execution device. Accepts 'auto', 'cpu', 'cuda', or explicit device strings like 'cuda:0'.",
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -82,6 +82,45 @@ def parse_args() -> argparse.Namespace:
             "print an aggregate summary."
         ),
     )
+    parser.add_argument(
+        "--mixed-precision",
+        choices=("none", "bf16"),
+        default="none",
+        help="Enable autocast mixed precision. Currently supports BF16 on CUDA.",
+    )
+    parser.add_argument(
+        "--memory-profile",
+        action="store_true",
+        help="Record CUDA memory history during the measurement phase and dump a snapshot.",
+    )
+    parser.add_argument(
+        "--memory-history-max-entries",
+        type=int,
+        default=1_000_000,
+        help="Max number of entries for torch.cuda memory history recording.",
+    )
+    parser.add_argument(
+        "--memory-snapshot-path",
+        type=str,
+        default="memory_snapshot.pickle",
+        help="Path for the CUDA memory snapshot pickle when --memory-profile is enabled.",
+    )
+    parser.add_argument(
+        "--compile-model",
+        action="store_true",
+        help="Wrap the Transformer model with torch.compile before benchmarking.",
+    )
+    parser.add_argument(
+        "--compile-mode",
+        choices=("default", "reduce-overhead", "max-autotune"),
+        default="default",
+        help="torch.compile mode used when --compile-model is set.",
+    )
+    parser.add_argument(
+        "--compile-backend",
+        default="inductor",
+        help="torch.compile backend used when --compile-model is set.",
+    )
     return parser.parse_args()
 
 
@@ -91,12 +130,32 @@ def resolve_device(device_arg: str) -> torch.device:
     device = torch.device(device_arg)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is not available.")
+    if device.type == "cuda" and device.index is not None and device.index >= torch.cuda.device_count():
+        raise RuntimeError(
+            f"CUDA device index {device.index} is out of range for {torch.cuda.device_count()} visible device(s)."
+        )
     return device
 
 
 def maybe_synchronize(device: torch.device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize(device)
+
+
+def resolve_autocast_dtype(args: argparse.Namespace, device: torch.device) -> torch.dtype | None:
+    if args.mixed_precision == "none":
+        return None
+    if device.type != "cuda":
+        raise ValueError("mixed precision is only supported on CUDA in this benchmark.")
+    if args.mixed_precision == "bf16":
+        return torch.bfloat16
+    raise ValueError(f"Unsupported mixed precision mode: {args.mixed_precision}")
+
+
+def autocast_context(device: torch.device, autocast_dtype: torch.dtype | None):
+    if autocast_dtype is None:
+        return nullcontext()
+    return torch.autocast(device_type=device.type, dtype=autocast_dtype)
 
 
 def make_model(args: argparse.Namespace, device: torch.device) -> BasicsTransformerLM:
@@ -118,6 +177,14 @@ def make_batch(args: argparse.Namespace, device: torch.device) -> tuple[torch.Te
     inputs = torch.randint(0, args.vocab_size, shape, device=device, dtype=torch.long)
     targets = torch.randint(0, args.vocab_size, shape, device=device, dtype=torch.long)
     return inputs, targets
+
+
+def maybe_compile_model(model: BasicsTransformerLM, args: argparse.Namespace) -> torch.nn.Module:
+    if not args.compile_model:
+        return model
+    kwargs = {} if args.compile_mode == "default" else {"mode": args.compile_mode}
+    kwargs["backend"] = args.compile_backend
+    return torch.compile(model, **kwargs)
 
 
 def compute_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -161,16 +228,19 @@ def benchmark_step(
     optimizer: AdamW | None,
     inputs: torch.Tensor,
     targets: torch.Tensor,
+    device: torch.device,
+    autocast_dtype: torch.dtype | None,
 ) -> None:
-    if mode == "forward":
-        run_forward(model, inputs)
-        return
-    if mode == "forward_backward":
-        run_forward_backward(model, inputs, targets)
-        return
-    if optimizer is None:
-        raise RuntimeError("train_step mode requires an optimizer.")
-    run_train_step(model, optimizer, inputs, targets)
+    with autocast_context(device, autocast_dtype):
+        if mode == "forward":
+            run_forward(model, inputs)
+            return
+        if mode == "forward_backward":
+            run_forward_backward(model, inputs, targets)
+            return
+        if optimizer is None:
+            raise RuntimeError("train_step mode requires an optimizer.")
+        run_train_step(model, optimizer, inputs, targets)
 
 
 def summarize_times(times: list[float]) -> dict[str, float]:
@@ -187,8 +257,11 @@ def summarize_times(times: list[float]) -> dict[str, float]:
 def print_run_header(
     args: argparse.Namespace,
     device: torch.device,
-    model: BasicsTransformerLM,
+    model: torch.nn.Module,
+    parameter_count: int,
+    parameter_dtype: torch.dtype,
     warmup_steps: int,
+    autocast_dtype: torch.dtype | None,
 ) -> None:
     model.train(args.mode != "forward")
     if device.type == "cuda":
@@ -198,9 +271,16 @@ def print_run_header(
     print(f"Batch size: {args.batch_size}")
     print(f"Context length: {args.context_length}")
     print(f"Vocab size: {args.vocab_size}")
-    print(f"Parameter count: {model.get_num_params(non_embedding=False)}")
+    print(f"Parameter count: {parameter_count}")
+    print(f"Parameter dtype: {parameter_dtype}")
+    print(f"Mixed precision: {args.mixed_precision}")
+    print(f"Autocast dtype: {autocast_dtype}")
+    print(f"Compile model: {args.compile_model}")
+    print(f"Compile mode: {args.compile_mode}")
+    print(f"Compile backend: {args.compile_backend}")
     print(f"Warmup steps: {warmup_steps}")
     print(f"Measurement steps: {args.measurement_steps}")
+    print(f"Memory profile: {args.memory_profile}")
 
 
 def run_benchmark(
@@ -216,36 +296,60 @@ def run_benchmark(
 
     torch.manual_seed(args.seed)
     device = resolve_device(args.device)
-    model = make_model(args, device)
-    model.train(args.mode != "forward")
+    autocast_dtype = resolve_autocast_dtype(args, device)
+    if args.memory_profile and device.type != "cuda":
+        raise ValueError("memory profiling requires a CUDA device.")
+    base_model = make_model(args, device)
+    base_model.train(args.mode != "forward")
+    parameter_count = base_model.get_num_params(non_embedding=False)
+    parameter_dtype = next(base_model.parameters()).dtype
     optimizer = None
     if args.mode == "train_step":
         optimizer = AdamW(
-            model.parameters(),
+            base_model.parameters(),
             lr=args.lr,
             weight_decay=args.weight_decay,
         )
+    model = maybe_compile_model(base_model, args)
+    model.train(args.mode != "forward")
     inputs, targets = make_batch(args, device)
 
-    print_run_header(args, device, model, effective_warmup_steps)
+    print_run_header(args, device, model, parameter_count, parameter_dtype, effective_warmup_steps, autocast_dtype)
 
     for step_idx in range(effective_warmup_steps):
         maybe_synchronize(device)
         start = default_timer()
-        benchmark_step(args.mode, model, optimizer, inputs, targets)
+        benchmark_step(args.mode, model, optimizer, inputs, targets, device, autocast_dtype)
         maybe_synchronize(device)
         elapsed = default_timer() - start
         print(f"warmup_step={step_idx + 1} time_ms={elapsed * 1000.0:.3f}")
+
+    if args.memory_profile:
+        torch.cuda.reset_peak_memory_stats(device)
+        torch.cuda.memory._record_memory_history(max_entries=args.memory_history_max_entries)
+        print(f"Memory snapshot path: {args.memory_snapshot_path}")
 
     measurement_times: list[float] = []
     for step_idx in range(args.measurement_steps):
         maybe_synchronize(device)
         start = default_timer()
-        benchmark_step(args.mode, model, optimizer, inputs, targets)
+        benchmark_step(args.mode, model, optimizer, inputs, targets, device, autocast_dtype)
         maybe_synchronize(device)
         elapsed = default_timer() - start
         measurement_times.append(elapsed)
         print(f"measurement_step={step_idx + 1} time_ms={elapsed * 1000.0:.3f}")
+
+    peak_allocated_mb = None
+    peak_reserved_mb = None
+    if args.memory_profile:
+        peak_allocated_mb = torch.cuda.max_memory_allocated(device) / (1024**2)
+        peak_reserved_mb = torch.cuda.max_memory_reserved(device) / (1024**2)
+        snapshot_path = Path(args.memory_snapshot_path)
+        if not snapshot_path.is_absolute():
+            snapshot_path = Path(__file__).resolve().parent / snapshot_path
+        snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.cuda.memory._dump_snapshot(str(snapshot_path))
+        torch.cuda.memory._record_memory_history(enabled=None)
 
     summary = summarize_times(measurement_times)
     tokens_per_step = args.batch_size * args.context_length
@@ -258,6 +362,9 @@ def run_benchmark(
     print(f"  max_ms={summary['max_ms']:.3f}")
     print(f"  tokens_per_step={tokens_per_step}")
     print(f"  tokens_per_second={tokens_per_second:.3f}")
+    if peak_allocated_mb is not None and peak_reserved_mb is not None:
+        print(f"  peak_memory_allocated_mb={peak_allocated_mb:.3f}")
+        print(f"  peak_memory_reserved_mb={peak_reserved_mb:.3f}")
     return {
         "warmup_steps": float(effective_warmup_steps),
         "mean_ms": summary["mean_ms"],
@@ -266,6 +373,8 @@ def run_benchmark(
         "max_ms": summary["max_ms"],
         "tokens_per_step": float(tokens_per_step),
         "tokens_per_second": tokens_per_second,
+        "peak_memory_allocated_mb": peak_allocated_mb or 0.0,
+        "peak_memory_reserved_mb": peak_reserved_mb or 0.0,
     }
 
 
@@ -297,7 +406,14 @@ def build_subprocess_command(args: argparse.Namespace, warmup_steps: int) -> lis
         args.device,
         "--seed",
         str(args.seed),
+        "--mixed-precision",
+        args.mixed_precision,
     ]
+    if args.compile_model:
+        command.append("--compile-model")
+        command.extend(["--compile-mode", args.compile_mode])
+        command.extend(["--compile-backend", args.compile_backend])
+    return command
 
 
 def parse_summary(stdout: str, warmup_steps: int) -> dict[str, float]:
