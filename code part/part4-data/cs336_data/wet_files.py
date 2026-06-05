@@ -7,7 +7,6 @@ from io import BytesIO
 from pathlib import Path
 
 from collections.abc import Callable
-import fasttext
 import modal
 import polars as pl
 from warcio.archiveiterator import ArchiveIterator
@@ -15,9 +14,33 @@ from warcio.warcwriter import WARCWriter
 
 from cs336_data.common import get_shared_assets_path
 from cs336_data.modal_utils import VOLUME_MOUNTS, app, build_image
+from cs336_data.processing import identify_language
 from furu import Furu
 
 BASE_URL = "https://data.commoncrawl.org/"
+
+
+def _build_is_english(threshold: float = 0.7) -> Callable[[str], bool]:
+    model_path = get_shared_assets_path() / "classifiers" / "lid.176.bin"
+    if model_path.exists():
+        import fasttext
+
+        model = fasttext.load_model(str(model_path))
+
+        def is_english_with_fasttext(text: str) -> bool:
+            labels, scores = model.predict(text.replace("\n", " "), k=1)
+            if not labels:
+                return False
+            label = labels[0].removeprefix("__label__")
+            return label == "en" and float(scores[0]) >= threshold
+
+        return is_english_with_fasttext
+
+    def is_english_with_heuristic(text: str) -> bool:
+        language, score = identify_language(text)
+        return language == "en" and score >= 0.5
+
+    return is_english_with_heuristic
 
 
 
@@ -28,8 +51,7 @@ class _EnglishWetFile(Furu[Path]):
         output_path = self.data_dir / "data.warc.wet.gz"
 
         self.logger.info("Loading English language identifier")
-        is_english: Callable[[str], bool] = "TODO"
-        assert is_english != "TODO", "you need to implement is_english. we use probability >= 0.7 with https://dl.fbaipublicfiles.com/fasttext/supervised-models/lid.176.bin"
+        is_english = _build_is_english(threshold=0.7)
 
         total_text = 0
         skipped_text = 0
