@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export UV_CACHE_DIR="${UV_CACHE_DIR:-$PWD/.uv-cache}"
+
 uv run pytest -v ./tests/test_grpo.py --junitxml=test_results.xml || true
 echo "Done running tests"
 
@@ -24,6 +26,7 @@ zip -r "$output_file" . \
     -x '*.out' \
     -x '*.err' \
     -x '.git*' \
+    -x '.uv-cache/*' \
     -x '.venv/*' \
     -x '*.bin' \
     -x '*.pt' \
